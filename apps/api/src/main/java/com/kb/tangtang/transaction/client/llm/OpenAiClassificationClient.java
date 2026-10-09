@@ -168,7 +168,7 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
             node.put("merchantCategoryName", tx.getMerchantCategoryName() == null ? "" : tx.getMerchantCategoryName());
             node.put("amount", tx.getAmount() == null ? "" : tx.getAmount().toPlainString());
             node.put("description", tx.getDescription1() == null ? "" : tx.getDescription1());
-            DirectoryHint hint = hints.get(tx.getId());
+            DirectoryHint hint = tx.getId() == null ? null : hints.get(tx.getId());
             if (hint != null) {
                 ObjectNode hintNode = node.putObject("directoryHint");
                 hintNode.put("matchType", hint.getMatchType());

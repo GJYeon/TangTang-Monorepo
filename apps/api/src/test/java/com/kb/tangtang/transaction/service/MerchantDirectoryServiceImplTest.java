@@ -150,4 +150,20 @@ class MerchantDirectoryServiceImplTest {
 
         assertTrue(service.findHints(List.of(tx(1L, "성민식당"))).isEmpty());
     }
+
+    @Test
+    @DisplayName("100자를 넘는 가맹점명은 컬럼 길이(VARCHAR(100))를 넘는 조회 키를 만들지 않는다")
+    @SuppressWarnings("unchecked")
+    void skipsKeysLongerThanColumnLength() {
+        ArgumentCaptor<Collection<String>> captor = ArgumentCaptor.forClass(Collection.class);
+        when(mapper.findByNames(any())).thenReturn(List.of());
+        String longName = "가".repeat(150);
+
+        service.findHints(List.of(tx(1L, longName), tx(2L, "성민식당")));
+
+        verify(mapper).findByNames(captor.capture());
+        Collection<String> keys = captor.getValue();
+        assertTrue(keys.contains("성민식당"));
+        assertTrue(keys.stream().allMatch(k -> k.length() <= 100));
+    }
 }

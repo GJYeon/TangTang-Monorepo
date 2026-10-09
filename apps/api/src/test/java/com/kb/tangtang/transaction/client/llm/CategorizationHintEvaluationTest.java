@@ -144,6 +144,8 @@ class CategorizationHintEvaluationTest {
         List<String> detail = new ArrayList<>();
         detail.add("weight\tmerchant\tlabel\thint\twithout\twith");
         int total = 0;
+        int onlyWithoutHints = 0;   // 힌트 없을 때만 소분류 정답 (거래 수 가중)
+        int onlyWithHints = 0;      // 힌트 있을 때만 소분류 정답
         for (int i = 0; i < items.size(); i++) {
             String[] cols = items.get(i).split("\t");
             int weight = weightByItem.get(items.get(i));
@@ -153,6 +155,13 @@ class CategorizationHintEvaluationTest {
             String after = nameById.get(withHints.get((long) i));
             tally(score.get("힌트 없음"), before, label, parentByName, weight);
             tally(score.get("힌트 있음"), after, label, parentByName, weight);
+            boolean beforeCorrect = label.equals(before);
+            boolean afterCorrect = label.equals(after);
+            if (beforeCorrect && !afterCorrect) {
+                onlyWithoutHints += weight;
+            } else if (!beforeCorrect && afterCorrect) {
+                onlyWithHints += weight;
+            }
             DirectoryHint hint = allHints.get((long) i);
             String hintText = hint == null ? "-" : hint.getMatchType() + ":" + hint.getMatchedName() + ">" + hint.getIndustryName();
             detail.add(String.join("\t", String.valueOf(weight), cols[0], label, hintText,
@@ -166,6 +175,8 @@ class CategorizationHintEvaluationTest {
             System.out.printf("%s\t%d\t%d\t%d\t%d\t%.1f%%%n", e.getKey(), s[0], s[1], s[2], s[3], 100.0 * s[0] / total);
         }
         System.out.printf("거래 %d건, 고유 가맹점 %d개, 힌트 붙은 고유 가맹점 %d개%n", total, items.size(), allHints.size());
+        System.out.printf("불일치 쌍(거래 수 기준) 힌트 없을 때만 소분류 정답 %d건, 힌트 있을 때만 소분류 정답 %d건%n",
+                onlyWithoutHints, onlyWithHints);
         int missingWithout = 0;
         int missingWith = 0;
         for (int i = 0; i < items.size(); i++) {

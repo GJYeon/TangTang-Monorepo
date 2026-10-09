@@ -27,6 +27,9 @@ public class MerchantDirectoryServiceImpl implements MerchantDirectoryService {
 
     private static final Logger log = LoggerFactory.getLogger(MerchantDirectoryServiceImpl.class);
 
+    /** tbl_merchant_directory.merchant_name_normalized 가 VARCHAR(100) 이라 이보다 긴 키는 절대 일치하지 않는다. */
+    private static final int MAX_KEY_LENGTH = 100;
+
     private final MerchantDirectoryMapper merchantDirectoryMapper;
 
     public MerchantDirectoryServiceImpl(MerchantDirectoryMapper merchantDirectoryMapper) {
@@ -48,8 +51,14 @@ public class MerchantDirectoryServiceImpl implements MerchantDirectoryService {
             }
             variantsByTransaction.put(tx.getId(), variants);
             for (String variant : variants) {
-                keys.add(variant);
-                keys.addAll(MerchantNameVariants.prefixes(variant));
+                if (variant.length() <= MAX_KEY_LENGTH) {
+                    keys.add(variant);
+                }
+                for (String prefix : MerchantNameVariants.prefixes(variant)) {
+                    if (prefix.length() <= MAX_KEY_LENGTH) {
+                        keys.add(prefix);
+                    }
+                }
             }
         }
         if (keys.isEmpty()) {
