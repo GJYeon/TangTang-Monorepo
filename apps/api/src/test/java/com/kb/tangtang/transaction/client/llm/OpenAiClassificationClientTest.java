@@ -3,6 +3,7 @@ package com.kb.tangtang.transaction.client.llm;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.kb.tangtang.common.exception.BusinessException;
 import com.kb.tangtang.transaction.domain.Category;
+import com.kb.tangtang.transaction.domain.DirectoryHint;
 import com.kb.tangtang.transaction.domain.Transaction;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +14,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -306,5 +308,52 @@ class OpenAiClassificationClientTest {
 
         assertEquals(1, result.size());
         assertNull(result.get(0).getCategoryId());
+    }
+
+    @Test
+    @DisplayName("힌트가 있는 거래에만 directoryHint 를 붙이고, 시스템 프롬프트에 판단 기준을 싣는다")
+    void sendsDirectoryHintOnlyForHintedTransactions() {
+        DirectoryHint hint = DirectoryHint.builder()
+                .matchType(DirectoryHint.EXACT).matchedName("성민식당").industryName("한식>백반/한정식")
+                .suggestedCategoryId(13L).storeCount(3).share(new BigDecimal("1.000")).build();
+
+        mockServer.expect(requestTo("https://api.openai.com/v1/chat/completions"))
+                .andExpect(request -> {
+                    String body = request.getBody().toString();
+                    assertTrue(body.contains("directoryHint"), "system prompt 에 directoryHint 설명이 있어야 한다");
+                    assertTrue(body.contains("\\\"directoryHint\\\":{\\\"matchType\\\":\\\"EXACT\\\""),
+                            "1번 거래에 힌트 객체가 직렬화돼야 한다: " + body);
+                    assertTrue(body.contains("\\\"suggestedCategoryId\\\":13"));
+                    assertTrue(body.contains("\\\"share\\\":1.0"));
+                    assertEquals(1, body.split("\\\\\"directoryHint\\\\\":\\{").length - 1,
+                            "힌트 없는 2번 거래에는 directoryHint 가 없어야 한다");
+                })
+                .andRespond(withSuccess(
+                        "{\"choices\":[{\"message\":{\"content\":\"{\\\"results\\\":[]}\"}}]}",
+                        MediaType.APPLICATION_JSON));
+
+        client.classify(List.of(tx(1L, "성민식당"), tx(2L, "정체불명")),
+                List.of(Category.builder().id(13L).categoryName("음식점/외식").parentId(1L).build()),
+                Map.of(1L, hint));
+
+        mockServer.verify();
+    }
+
+    @Test
+    @DisplayName("2-인자 classify 는 힌트 없이 동작한다")
+    void twoArgClassifySendsNoHint() {
+        mockServer.expect(requestTo("https://api.openai.com/v1/chat/completions"))
+                .andExpect(request -> {
+                    String body = request.getBody().toString();
+                    assertTrue(!body.contains("\\\"directoryHint\\\":{"), "힌트 객체가 없어야 한다");
+                })
+                .andRespond(withSuccess(
+                        "{\"choices\":[{\"message\":{\"content\":\"{\\\"results\\\":[]}\"}}]}",
+                        MediaType.APPLICATION_JSON));
+
+        client.classify(List.of(tx(1L, "성민식당")),
+                List.of(Category.builder().id(13L).categoryName("음식점/외식").parentId(1L).build()));
+
+        mockServer.verify();
     }
 }

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.kb.tangtang.common.exception.BusinessException;
 import com.kb.tangtang.transaction.domain.Category;
+import com.kb.tangtang.transaction.domain.DirectoryHint;
 import com.kb.tangtang.transaction.domain.Transaction;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,6 +21,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 이슈 #147 후속 — OpenAI Chat Completions API 로 거래를 표준 카테고리로 분류한다.
@@ -57,7 +59,17 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
             + "(예: CU역삼점, 스타벅스강남역점, 이디야논현점). 끝에 오는 지역명·역명·'점'/'지점' 토큰은 "
             + "지점 표시이므로 무시하고 앞부분의 브랜드명만으로 업종을 판단하세요. "
             + "브랜드명은 영문 표기(CU, GS25)뿐 아니라 한글 음차 표기(씨유, 지에스25)로도 들어올 수 "
-            + "있습니다. 같은 브랜드의 한글 음차 표기라고 해서 영문 표기보다 확신도를 낮추지 마세요.";
+            + "있습니다. 같은 브랜드의 한글 음차 표기라고 해서 영문 표기보다 확신도를 낮추지 마세요. "
+            + "일부 거래에는 directoryHint 가 붙습니다. 전국 상가 등록 정보에서 가맹점명으로 찾은 참고 "
+            + "근거이며 정답이 아닙니다. matchedName 은 찾은 상호, industryName 은 그 상호의 업종, "
+            + "storeCount 는 같은 이름의 점포 수, share 는 그중 이 업종의 비율, suggestedCategoryId 는 "
+            + "그 업종에 대응하는 카테고리 목록의 id 입니다(없을 수 있음). "
+            + "matchType 이 EXACT 이고 share 가 높으면 강하게 반영하세요. "
+            + "matchType 이 PREFIX 이면 상호의 앞부분만 같은 다른 가게일 수 있으니 약하게 반영하세요. "
+            + "share 가 낮거나, 가맹점이 플랫폼·간편결제·결제대행(PG)·통신사·택시 호출 서비스로 보이면 "
+            + "directoryHint 를 무시하고 가맹점명으로 판단하세요. "
+            + "merchantCategoryName 이 있으면 directoryHint 보다 우선합니다. "
+            + "suggestedCategoryId 를 그대로 답할 필요는 없고, 목록의 id 만 답하세요.";
 
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
@@ -82,7 +94,8 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
     }
 
     @Override
-    public List<CategoryAssignmentDto> classify(List<Transaction> transactions, List<Category> categories) {
+    public List<CategoryAssignmentDto> classify(List<Transaction> transactions, List<Category> categories,
+                                                Map<Long, DirectoryHint> hints) {
         // 키가 없으면 기동을 막지 않고 이 기능만 실패시킨다. 예전에는 프로퍼티가 없으면
         // 컨텍스트 로딩 자체가 깨져 서비스 전체가 뜨지 못했다(신규 설치자가 매번 걸렸다).
         if (apiKey == null || apiKey.isBlank()) {
@@ -90,7 +103,7 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
                     "OpenAI API 키가 설정되지 않아 자동 카테고리화를 할 수 없습니다.");
         }
 
-        ObjectNode requestBody = buildRequestBody(transactions, categories);
+        ObjectNode requestBody = buildRequestBody(transactions, categories, hints == null ? Map.of() : hints);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
@@ -117,7 +130,8 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
                 MAX_ATTEMPTS + "번 재시도했지만 OpenAI 응답 파싱에 계속 실패했다: " + lastParseFailure.getMessage());
     }
 
-    private ObjectNode buildRequestBody(List<Transaction> transactions, List<Category> categories) {
+    private ObjectNode buildRequestBody(List<Transaction> transactions, List<Category> categories,
+                                        Map<Long, DirectoryHint> hints) {
         ObjectNode root = objectMapper.createObjectNode();
         root.put("model", model);
 
@@ -128,13 +142,14 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
 
         ObjectNode userMessage = messages.addObject();
         userMessage.put("role", "user");
-        userMessage.put("content", buildUserContent(transactions, categories));
+        userMessage.put("content", buildUserContent(transactions, categories, hints));
 
         root.set("response_format", buildResponseFormat());
         return root;
     }
 
-    private String buildUserContent(List<Transaction> transactions, List<Category> categories) {
+    private String buildUserContent(List<Transaction> transactions, List<Category> categories,
+                                    Map<Long, DirectoryHint> hints) {
         ObjectNode payload = objectMapper.createObjectNode();
 
         ArrayNode categoryArray = payload.putArray("categories");
@@ -153,6 +168,19 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
             node.put("merchantCategoryName", tx.getMerchantCategoryName() == null ? "" : tx.getMerchantCategoryName());
             node.put("amount", tx.getAmount() == null ? "" : tx.getAmount().toPlainString());
             node.put("description", tx.getDescription1() == null ? "" : tx.getDescription1());
+            DirectoryHint hint = hints.get(tx.getId());
+            if (hint != null) {
+                ObjectNode hintNode = node.putObject("directoryHint");
+                hintNode.put("matchType", hint.getMatchType());
+                hintNode.put("matchedName", hint.getMatchedName());
+                hintNode.put("industryName", hint.getIndustryName());
+                if (hint.getSuggestedCategoryId() != null) {
+                    hintNode.put("suggestedCategoryId", hint.getSuggestedCategoryId());
+                }
+                hintNode.put("storeCount", hint.getStoreCount());
+                /* double 로 보낸다 — ObjectNode.put(BigDecimal) 은 기본 JsonNodeFactory 가 끝자리 0 을 떼어 표기가 흔들린다. */
+                hintNode.put("share", hint.getShare() == null ? null : hint.getShare().doubleValue());
+            }
         }
 
         return payload.toString();
