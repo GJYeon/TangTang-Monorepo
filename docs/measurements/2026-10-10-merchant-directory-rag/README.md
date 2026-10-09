@@ -189,3 +189,35 @@ node scripts/eval_map.mjs <작업폴더>
 - 시드에는 카드사 업종명(MCC)이 붙어 있어, 실제로는 상당수가 3단계 MCC 규칙에서 이미 분류될 수 있다.
 - 벡터 검색의 184만 개 전체 대상 측정, 차원 수(256 외)·다른 임베딩 모델 비교, 임계값을 건 어휘+벡터 결합.
 - 힌트 정답률이 아닌 **LLM 최종 정답률**에서의 차이 — 틀린 힌트를 LLM 이 얼마나 걸러내는지는 구현 후 측정해야 한다.
+
+## 6. LLM 전후 비교 (실행 대기)
+
+구현한 힌트가 LLM 정답률을 올리는지 같은 평가셋으로 잰다. 러너: `CategorizationHintEvaluationTest` (환경변수가 있을 때만 실행).
+
+**무엇을 재는가**
+- **LLM 단독 정답률**이다. 거래에 `merchantCategoryName` 을 넣지 않는다(시드에서는 그 값이 정답 라벨이라 넣으면 정답이 샌다).
+  규칙 1~4단계를 포함한 전체 파이프라인의 정답률이 아니다.
+- 같은 거래를 「힌트 없음 / 힌트 있음」으로 두 번 분류해 소분류 정답·대분류만 정답·오답·분류불가를 센다.
+  한쪽만 소분류를 맞힌 거래 수(불일치 쌍 b/c)도 함께 출력한다.
+
+**입력**
+- `TANGTANG_EVAL_DIR`: `merchant_directory.csv` 가 들어 있는 폴더. 이 파일은 위 「재현 방법」 1) 의 `scripts/aggregate.mjs` 가 만든 집계 CSV 다.
+  `db/merchant_directory/build.mjs` 가 만드는 SQL 이 **아니다**.
+- `OPENAI_API_KEY`
+
+**실행 (PowerShell)**
+```powershell
+# 키는 이 창의 환경변수로만 읽는다 (화면·파일·명령 기록에 남기지 않는다)
+$env:OPENAI_API_KEY = Read-Host -MaskInput "OPENAI_API_KEY"
+$env:TANGTANG_EVAL_DIR = "D:/.../out"
+$env:GRADLE_USER_HOME = "C:/gradle-home-ascii"   # 팀 환경에 맞게
+./gradlew :apps:api:test --tests "com.kb.tangtang.transaction.client.llm.CategorizationHintEvaluationTest" --rerun
+```
+
+**주의**
+- temperature 를 고정하지 않아 실행마다 결과가 달라진다. **2~3회 실행해 각각 보고한다.**
+- 한계: 업종 매핑과 프롬프트를 이 평가셋을 보면서 설계했다. 따로 떼어 둔 검증셋(held-out)이 없다.
+
+### 결과
+
+[측정 전]

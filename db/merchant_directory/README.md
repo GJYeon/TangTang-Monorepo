@@ -8,7 +8,20 @@ LLM 카테고리화에 **상가(상권)정보 업종 근거(`directoryHint`)** �
 
 ## 1. 배포본으로 적재 (보통 이것만 하면 된다)
 
-팀 공유 드라이브의 `merchant_directory.sql.gz` (약 20MB) 를 받아 압축을 풀고 적재한다. 1~2분 걸린다.
+`merchant_directory.sql.gz` (약 20MB) 배포본은 **업로드 예정(위치는 팀 채널 공지)** 이다.
+공지 전에는 아래 2. 로 직접 생성한다. 받아 압축을 풀고 적재하면 1~2분 걸린다.
+
+> ⚠ 이 파일은 `TRUNCATE` 후 `INSERT` 를 실행한다. **적재 전에 체크섬을 확인한다.**
+> `merchant_directory.sql.gz` sha256 = `9647216bd9dcf1a990956a3a22470ebe47ad9a7aaf056fe5a9a3b89218537e58`
+> (2026-10-10 생성, 상가(상권)정보_20260630 기준, 상호 1,838,475개)
+
+```bash
+sha256sum merchant_directory.sql.gz
+```
+
+```powershell
+Get-FileHash merchant_directory.sql.gz -Algorithm SHA256
+```
 
 ```bash
 gunzip -k merchant_directory.sql.gz
