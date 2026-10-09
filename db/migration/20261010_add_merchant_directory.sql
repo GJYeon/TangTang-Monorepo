@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS tbl_industry_category_map (
     industry_name VARCHAR(100) NOT NULL COMMENT '상권업종 중분류>소분류 이름 (LLM 프롬프트에 그대로 보낸다)',
     category_id   BIGINT       NULL     COMMENT '표준 카테고리. NULL 이면 소비 카테고리 대응 없음',
     PRIMARY KEY (industry_code),
-    CONSTRAINT fk_icm_category FOREIGN KEY (category_id) REFERENCES tbl_category (id)
+    CONSTRAINT fk_icm_category FOREIGN KEY (category_id) REFERENCES tbl_category (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='상가 업종 → 표준 카테고리 매핑';
 
 CREATE TABLE IF NOT EXISTS tbl_merchant_directory (
