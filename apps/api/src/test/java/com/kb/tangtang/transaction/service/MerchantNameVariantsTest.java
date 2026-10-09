@@ -31,6 +31,12 @@ class MerchantNameVariantsTest {
     }
 
     @Test
+    @DisplayName("전각 공백(U+3000) 뒤 지점명 토큰도 뗀다 — 측정 스크립트(JS \\s)와 같게")
+    void stripsBranchTokenAfterFullWidthSpace() {
+        assertEquals(List.of("스타벅스강남역점", "스타벅스"), MerchantNameVariants.of("스타벅스　강남역점"));
+    }
+
+    @Test
     @DisplayName("주) 와 (유) 법인 표기를 지운다")
     void stripsExtraCorporateMarkers() {
         assertEquals(List.of("비지에프네트웍"), MerchantNameVariants.of("주)비지에프네트웍"));

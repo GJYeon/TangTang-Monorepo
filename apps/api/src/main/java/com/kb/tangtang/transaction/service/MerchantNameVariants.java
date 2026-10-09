@@ -22,7 +22,9 @@ public final class MerchantNameVariants {
     private static final Pattern NUMERIC_SUFFIX = Pattern.compile("_\\d+$");
     /** 닫는 괄호가 잘려 없어도 끝까지 지운다: "엑시트피씨카페(EXI" */
     private static final Pattern PARENTHESES = Pattern.compile("\\([^)]*\\)?");
-    private static final Pattern BRANCH_TOKEN = Pattern.compile("\\s+\\S*(점|호점)$");
+    /** UNICODE_CHARACTER_CLASS: JS \s 처럼 전각 공백(U+3000)·NBSP 도 공백으로 본다. 없으면 Java \s 는 ASCII 만 본다. */
+    private static final Pattern BRANCH_TOKEN =
+            Pattern.compile("\\s+\\S*(점|호점)$", Pattern.UNICODE_CHARACTER_CLASS);
 
     private MerchantNameVariants() {
     }
