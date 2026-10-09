@@ -25,6 +25,9 @@ out/
 .env.*
 !.env.example
 
+# ---- 상호 사전 생성물 (db/merchant_directory/README.md) ----
+db/merchant_directory/*.sql
+db/merchant_directory/*.sql.gz
 # ---- Node / Vue ----
 node_modules/
 dist/
