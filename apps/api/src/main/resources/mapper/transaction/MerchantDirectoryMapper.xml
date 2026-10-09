@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.kb.tangtang.transaction.mapper.MerchantDirectoryMapper">
+
+    <!--
+      merchant_name_normalized 는 기본키(utf8mb4_bin)라 IN 목록이 수백 개여도 인덱스 조회다.
+      업종 매핑은 LEFT JOIN — 매핑에 없는 업종 코드도 사전 행은 돌려준다(industry_name·category_id 가 null).
+    -->
+    <select id="findByNames" resultType="com.kb.tangtang.transaction.domain.MerchantDirectoryEntry">
+        SELECT d.merchant_name_normalized,
+               d.industry_code,
+               m.industry_name,
+               m.category_id,
+               d.store_count,
+               d.top_share
+          FROM tbl_merchant_directory d
+          LEFT JOIN tbl_industry_category_map m
+            ON m.industry_code = d.industry_code
+         WHERE d.merchant_name_normalized IN
+        <foreach collection="names" item="name" open="(" separator="," close=")">
+            #{name}
+        </foreach>
+    </select>
+
+</mapper>
