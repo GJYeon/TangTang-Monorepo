@@ -7,6 +7,7 @@ import com.kb.tangtang.transaction.domain.MerchantDirectoryEntry;
 import com.kb.tangtang.transaction.domain.Transaction;
 import com.kb.tangtang.transaction.mapper.MerchantDirectoryMapper;
 import com.kb.tangtang.transaction.service.MerchantDirectoryServiceImpl;
+import com.kb.tangtang.transaction.service.MerchantNameVariants;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -20,6 +21,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.function.Supplier;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,9 +89,6 @@ class CategorizationHintEvaluationTest {
             }
         }
 
-        MerchantDirectoryServiceImpl directoryService =
-                new MerchantDirectoryServiceImpl(inMemoryMapper(evalDir.resolve("merchant_directory.csv"), idByName));
-
         /* 고유 (가맹점명, 정답) → 거래 수 */
         Map<String, Integer> weightByItem = new LinkedHashMap<>();
         for (String line : Files.readAllLines(DATA_DIR.resolve("seed_rows.tsv"), StandardCharsets.UTF_8)) {
@@ -105,6 +106,17 @@ class CategorizationHintEvaluationTest {
             transactions.add(Transaction.builder().id((long) i).merchantName(items.get(i).split("\t")[0]).build());
         }
 
+        /* 운영과 같은 키 집합만 메모리에 올린다 — findHints 는 이 키들만 조회한다. */
+        Set<String> wantedKeys = new HashSet<>();
+        for (Transaction t : transactions) {
+            for (String variant : MerchantNameVariants.of(t.getMerchantName())) {
+                wantedKeys.add(variant);
+                wantedKeys.addAll(MerchantNameVariants.prefixes(variant));
+            }
+        }
+        MerchantDirectoryServiceImpl directoryService = new MerchantDirectoryServiceImpl(
+                inMemoryMapper(evalDir.resolve("merchant_directory.csv"), idByName, wantedKeys));
+
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
         factory.setReadTimeout(60_000);
@@ -118,9 +130,10 @@ class CategorizationHintEvaluationTest {
             List<Transaction> batch = transactions.subList(start, Math.min(start + BATCH_SIZE, transactions.size()));
             Map<Long, DirectoryHint> hints = directoryService.findHints(batch);
             allHints.putAll(hints);
-            client.classify(batch, categories, Map.of())
+            String range = start + "~" + (start + batch.size() - 1);
+            withRetry(range, () -> client.classify(batch, categories, Map.of()))
                     .forEach(a -> withoutHints.put(a.getTransactionId(), a.getCategoryId()));
-            client.classify(batch, categories, hints)
+            withRetry(range, () -> client.classify(batch, categories, hints))
                     .forEach(a -> withHints.put(a.getTransactionId(), a.getCategoryId()));
             System.out.printf("진행 %d/%d%n", Math.min(start + BATCH_SIZE, transactions.size()), transactions.size());
         }
@@ -153,6 +166,23 @@ class CategorizationHintEvaluationTest {
             System.out.printf("%s\t%d\t%d\t%d\t%d\t%.1f%%%n", e.getKey(), s[0], s[1], s[2], s[3], 100.0 * s[0] / total);
         }
         System.out.printf("거래 %d건, 고유 가맹점 %d개, 힌트 붙은 고유 가맹점 %d개%n", total, items.size(), allHints.size());
+        int missingWithout = 0;
+        int missingWith = 0;
+        for (int i = 0; i < items.size(); i++) {
+            missingWithout += withoutHints.containsKey((long) i) ? 0 : 1;
+            missingWith += withHints.containsKey((long) i) ? 0 : 1;
+        }
+        System.out.printf("예측 누락(응답에 id 없음, 고유 가맹점 기준) 힌트 없음 %d개, 힌트 있음 %d개%n", missingWithout, missingWith);
+    }
+
+    /** 배치 하나가 실패해도 유료 실행 전체를 잃지 않도록 한 번 재시도한다. */
+    private static <T> T withRetry(String range, Supplier<T> call) {
+        try {
+            return call.get();
+        } catch (RuntimeException e) {
+            System.out.printf("경고: 배치 %s 실패, 1회 재시도 (%s)%n", range, e.getMessage());
+            return call.get();
+        }
     }
 
     private static void tally(int[] s, String predicted, String label, Map<String, String> parentByName, int weight) {
@@ -168,7 +198,8 @@ class CategorizationHintEvaluationTest {
     }
 
     /** 집계 CSV + 업종 매핑 TSV 를 메모리에 올린 가짜 매퍼. 운영 매퍼와 같은 결과 모양을 돌려준다. */
-    private static MerchantDirectoryMapper inMemoryMapper(Path directoryCsv, Map<String, Long> idByName) throws IOException {
+    private static MerchantDirectoryMapper inMemoryMapper(Path directoryCsv, Map<String, Long> idByName,
+                                                      Set<String> wantedKeys) throws IOException {
         Map<String, String> industryNameByCode = new HashMap<>();
         for (String line : Files.readAllLines(DATA_DIR.resolve("industry_codes.csv"), StandardCharsets.UTF_8)) {
             String[] c = line.split(",");
@@ -184,11 +215,11 @@ class CategorizationHintEvaluationTest {
                 categoryIdByCode.put(c[0], idByName.get(c[2]));
             }
         }
-        Map<String, MerchantDirectoryEntry> entries = new HashMap<>(2_500_000);
+        Map<String, MerchantDirectoryEntry> entries = new HashMap<>();
         try (var lines = Files.lines(directoryCsv, StandardCharsets.UTF_8)) {
             lines.forEach(line -> {
                 String[] c = line.split(",");
-                if (c.length < 4) {
+                if (c.length < 4 || !wantedKeys.contains(c[0])) {
                     return;
                 }
                 entries.put(c[0], MerchantDirectoryEntry.builder()
