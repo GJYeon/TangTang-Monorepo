@@ -265,6 +265,10 @@ class OpenAiClassificationClientTest {
 
         /* 두 번째 요청이 없어야 한다 — 등록된 expectation 은 하나뿐이라, 더 불렀다면 mockServer.verify()가 아니라
            unexpected request 예외로 먼저 실패한다. */
+        mockServer.verify();
+    }
+
+    @Test
     @DisplayName("요청 본문에 merchantCategoryName(MCC 업종명)이 포함된다")
     void requestBodyIncludesMerchantCategoryName() throws Exception {
         mockServer.expect(requestTo("https://api.openai.com/v1/chat/completions"))
