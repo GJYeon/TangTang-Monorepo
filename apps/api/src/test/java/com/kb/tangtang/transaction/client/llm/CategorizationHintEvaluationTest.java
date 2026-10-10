@@ -41,7 +41,7 @@ class CategorizationHintEvaluationTest {
 
     private static final Path DATA_DIR = Path.of("../../docs/measurements/2026-10-10-merchant-directory-rag/data");
     private static final String MODEL = "gpt-4o-mini";            // application.properties openai.api.model 과 같게
-    private static final double CONFIDENCE_THRESHOLD = 0.81;      // llm.categorization.confidence-threshold 와 같게
+    private static final double CONFIDENCE_THRESHOLD = 0.8;       // llm.categorization.confidence-threshold 와 같게
     private static final int BATCH_SIZE = 20;
     /**
      * 임계값 비교용. 임계값은 응답을 받은 뒤 적용하는 후처리라, 임계값 0 으로 받은 원본 응답에
@@ -150,7 +150,7 @@ class CategorizationHintEvaluationTest {
         score.put("힌트 없음", new int[4]);
         score.put("힌트 있음", new int[4]);
         List<String> detail = new ArrayList<>();
-        /* without/with 는 운영 임계값(0.81) 적용 결과, *_raw·*_conf 는 임계값 적용 전 원본 응답. */
+        /* without/with 는 운영 임계값(CONFIDENCE_THRESHOLD) 적용 결과, *_raw·*_conf 는 임계값 적용 전 원본 응답. */
         detail.add("weight\tmerchant\tlabel\thint\twithout\twith\twithout_raw\twithout_conf\twith_raw\twith_conf");
         int total = 0;
         int onlyWithoutHints = 0;   // 힌트 없을 때만 소분류 정답 (거래 수 가중)
