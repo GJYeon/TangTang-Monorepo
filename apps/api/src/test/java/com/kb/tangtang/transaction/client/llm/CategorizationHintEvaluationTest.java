@@ -43,6 +43,11 @@ class CategorizationHintEvaluationTest {
     private static final String MODEL = "gpt-4o-mini";            // application.properties openai.api.model 과 같게
     private static final double CONFIDENCE_THRESHOLD = 0.81;      // llm.categorization.confidence-threshold 와 같게
     private static final int BATCH_SIZE = 20;
+    /**
+     * 임계값 비교용. 임계값은 응답을 받은 뒤 적용하는 후처리라, 임계값 0 으로 받은 원본 응답에
+     * 각 임계값을 적용한 결과는 그 임계값으로 운영했을 때의 결과와 같다.
+     */
+    private static final double[] SWEEP_THRESHOLDS = {0.0, 0.5, 0.6, 0.7, 0.75, 0.8, 0.81, 0.85, 0.9, 0.95};
 
     /** db/seed_category.sql + 20260816_add_income_categories.sql 과 같은 이름·계층. */
     private static final Map<String, List<String>> CATEGORY_TREE = new LinkedHashMap<>();
@@ -120,29 +125,33 @@ class CategorizationHintEvaluationTest {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
         factory.setReadTimeout(60_000);
+        /* 임계값 0 으로 원본 응답(categoryId·confidence)을 받고, 임계값은 아래에서 직접 적용한다. */
         OpenAiClassificationClient client = new OpenAiClassificationClient(new RestTemplate(factory),
-                new ObjectMapper(), apiKey, "https://api.openai.com", MODEL, CONFIDENCE_THRESHOLD);
+                new ObjectMapper(), apiKey, "https://api.openai.com", MODEL, 0.0);
 
         Map<Long, DirectoryHint> allHints = new HashMap<>();
-        Map<Long, Long> withoutHints = new HashMap<>();
-        Map<Long, Long> withHints = new HashMap<>();
+        Map<Long, CategoryAssignmentDto> rawWithoutHints = new HashMap<>();
+        Map<Long, CategoryAssignmentDto> rawWithHints = new HashMap<>();
         for (int start = 0; start < transactions.size(); start += BATCH_SIZE) {
             List<Transaction> batch = transactions.subList(start, Math.min(start + BATCH_SIZE, transactions.size()));
             Map<Long, DirectoryHint> hints = directoryService.findHints(batch);
             allHints.putAll(hints);
             String range = start + "~" + (start + batch.size() - 1);
             withRetry(range, () -> client.classify(batch, categories, Map.of()))
-                    .forEach(a -> withoutHints.put(a.getTransactionId(), a.getCategoryId()));
+                    .forEach(a -> rawWithoutHints.put(a.getTransactionId(), a));
             withRetry(range, () -> client.classify(batch, categories, hints))
-                    .forEach(a -> withHints.put(a.getTransactionId(), a.getCategoryId()));
+                    .forEach(a -> rawWithHints.put(a.getTransactionId(), a));
             System.out.printf("진행 %d/%d%n", Math.min(start + BATCH_SIZE, transactions.size()), transactions.size());
         }
+        Map<Long, Long> withoutHints = applyThreshold(rawWithoutHints, CONFIDENCE_THRESHOLD);
+        Map<Long, Long> withHints = applyThreshold(rawWithHints, CONFIDENCE_THRESHOLD);
 
         Map<String, int[]> score = new LinkedHashMap<>();   // 조건 → [소분류정답, 대분류만정답, 오답, null]
         score.put("힌트 없음", new int[4]);
         score.put("힌트 있음", new int[4]);
         List<String> detail = new ArrayList<>();
-        detail.add("weight\tmerchant\tlabel\thint\twithout\twith");
+        /* without/with 는 운영 임계값(0.81) 적용 결과, *_raw·*_conf 는 임계값 적용 전 원본 응답. */
+        detail.add("weight\tmerchant\tlabel\thint\twithout\twith\twithout_raw\twithout_conf\twith_raw\twith_conf");
         int total = 0;
         int onlyWithoutHints = 0;   // 힌트 없을 때만 소분류 정답 (거래 수 가중)
         int onlyWithHints = 0;      // 힌트 있을 때만 소분류 정답
@@ -164,8 +173,12 @@ class CategorizationHintEvaluationTest {
             }
             DirectoryHint hint = allHints.get((long) i);
             String hintText = hint == null ? "-" : hint.getMatchType() + ":" + hint.getMatchedName() + ">" + hint.getIndustryName();
+            CategoryAssignmentDto rawBefore = rawWithoutHints.get((long) i);
+            CategoryAssignmentDto rawAfter = rawWithHints.get((long) i);
             detail.add(String.join("\t", String.valueOf(weight), cols[0], label, hintText,
-                    String.valueOf(before), String.valueOf(after)));
+                    String.valueOf(before), String.valueOf(after),
+                    rawName(rawBefore, nameById), rawConfidence(rawBefore),
+                    rawName(rawAfter, nameById), rawConfidence(rawAfter)));
         }
         Files.write(evalDir.resolve("hint_eval_result.tsv"), detail, StandardCharsets.UTF_8);
 
@@ -184,6 +197,49 @@ class CategorizationHintEvaluationTest {
             missingWith += withHints.containsKey((long) i) ? 0 : 1;
         }
         System.out.printf("예측 누락(응답에 id 없음, 고유 가맹점 기준) 힌트 없음 %d개, 힌트 있음 %d개%n", missingWithout, missingWith);
+
+        /* 임계값별 결과 — 같은 원본 응답에 임계값만 바꿔 적용한다(추가 호출 없음). */
+        System.out.println("임계값표\t조건\t임계값\t소분류정답\t대분류만정답\t오답\t분류불가(null)\t소분류정답률\t답한것중소분류정답비율");
+        for (double threshold : SWEEP_THRESHOLDS) {
+            printSweepRow("힌트 없음", threshold,
+                    scoreAll(applyThreshold(rawWithoutHints, threshold), items, weightByItem, nameById, parentByName), total);
+            printSweepRow("힌트 있음", threshold,
+                    scoreAll(applyThreshold(rawWithHints, threshold), items, weightByItem, nameById, parentByName), total);
+        }
+    }
+
+    /** 운영 클라이언트와 같은 규칙: confidence 가 임계값 미만이면 분류 불가(null). 응답에 없는 id 는 맵에 넣지 않는다. */
+    private static Map<Long, Long> applyThreshold(Map<Long, CategoryAssignmentDto> raw, double threshold) {
+        Map<Long, Long> result = new HashMap<>();
+        raw.forEach((id, a) -> {
+            double confidence = a.getConfidence() == null ? 0.0 : a.getConfidence();
+            result.put(id, confidence < threshold ? null : a.getCategoryId());
+        });
+        return result;
+    }
+
+    private static int[] scoreAll(Map<Long, Long> predictions, List<String> items, Map<String, Integer> weightByItem,
+                                  Map<Long, String> nameById, Map<String, String> parentByName) {
+        int[] s = new int[4];
+        for (int i = 0; i < items.size(); i++) {
+            String label = items.get(i).split("\t")[1];
+            tally(s, nameById.get(predictions.get((long) i)), label, parentByName, weightByItem.get(items.get(i)));
+        }
+        return s;
+    }
+
+    private static void printSweepRow(String condition, double threshold, int[] s, int total) {
+        int answered = s[0] + s[1] + s[2];
+        System.out.printf("임계값표\t%s\t%.2f\t%d\t%d\t%d\t%d\t%.1f%%\t%s%n", condition, threshold, s[0], s[1], s[2], s[3],
+                100.0 * s[0] / total, answered == 0 ? "-" : String.format("%.1f%%", 100.0 * s[0] / answered));
+    }
+
+    private static String rawName(CategoryAssignmentDto a, Map<Long, String> nameById) {
+        return a == null ? "missing" : String.valueOf(nameById.get(a.getCategoryId()));
+    }
+
+    private static String rawConfidence(CategoryAssignmentDto a) {
+        return a == null || a.getConfidence() == null ? "-" : String.format("%.3f", a.getConfidence());
     }
 
     /** 배치 하나가 실패해도 유료 실행 전체를 잃지 않도록 한 번 재시도한다. */

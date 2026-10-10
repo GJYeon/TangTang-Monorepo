@@ -211,6 +211,26 @@ class OpenAiClassificationClientTest {
     }
 
     @Test
+    @DisplayName("임계값 때문에 categoryId 를 비워도 모델이 준 confidence 는 그대로 담는다")
+    void keepsRawConfidenceEvenWhenBelowThreshold() {
+        mockServer.expect(requestTo("https://api.openai.com/v1/chat/completions"))
+                .andRespond(withSuccess(
+                        "{\"choices\":[{\"message\":{\"content\":\"{\\\"results\\\":"
+                                + "[{\\\"transactionId\\\":1,\\\"categoryId\\\":5,\\\"confidence\\\":0.42},"
+                                + "{\\\"transactionId\\\":2,\\\"categoryId\\\":5,\\\"confidence\\\":0.93}]}\"}}]}",
+                        MediaType.APPLICATION_JSON));
+
+        List<CategoryAssignmentDto> result = client.classify(
+                List.of(tx(1L, "스타벅스"), tx(2L, "이디야")),
+                List.of(Category.builder().id(5L).categoryName("카페/간식").parentId(1L).build()));
+
+        assertNull(result.get(0).getCategoryId());
+        assertEquals(0.42, result.get(0).getConfidence(), 1e-9);
+        assertEquals(5L, result.get(1).getCategoryId());
+        assertEquals(0.93, result.get(1).getConfidence(), 1e-9);
+    }
+
+    @Test
     @DisplayName("content 가 유효한 JSON 이 아니면 한 번 더 물어보고, 재시도에서 성공하면 그 결과를 쓴다")
     void retriesOnceWhenContentIsMalformedJsonAndSucceeds() {
         mockServer.expect(requestTo("https://api.openai.com/v1/chat/completions"))

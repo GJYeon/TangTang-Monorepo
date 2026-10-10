@@ -272,6 +272,7 @@ public class OpenAiClassificationClient implements LlmClassificationClient {
                 results.add(CategoryAssignmentDto.builder()
                         .transactionId(transactionId)
                         .categoryId(categoryId)
+                        .confidence(confidence)
                         .build());
             }
             return results;
