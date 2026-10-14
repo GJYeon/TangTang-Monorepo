@@ -106,10 +106,10 @@ Get-ChildItem db/migration/*.sql | Sort-Object Name | ForEach-Object {
 > mysql -u root -p -e "ALTER USER 'tangtang'@'localhost' IDENTIFIED BY '새비밀번호'; FLUSH PRIVILEGES;"
 > ```
 
-확인: `mysql -u tangtang -p tangtang -e "SHOW TABLES"` → **2)까지만 했으면 33개, 3) 마이그레이션까지 적용하면 42개**
-(마이그레이션이 테이블 9개를 더 만든다: `tbl_card` · `tbl_card_bill` · `tbl_financial_sync_history` ·
-`tbl_fixed_expense_payment_reminder` · `tbl_llm_categorization_job` · `tbl_llm_categorization_job_item` ·
-`tbl_merchant_keyword_rule` · `tbl_mission_certificate_title` · `tbl_user_mission_analysis`)
+확인: `mysql -u tangtang -p tangtang -e "SHOW TABLES"` → **2)까지만 했으면 33개, 3) 마이그레이션까지 적용하면 44개**
+(마이그레이션이 테이블 11개를 더 만든다: `tbl_card` · `tbl_card_bill` · `tbl_financial_sync_history` ·
+`tbl_fixed_expense_payment_reminder` · `tbl_industry_category_map` · `tbl_llm_categorization_job` ·
+`tbl_llm_categorization_job_item` · `tbl_merchant_directory` · `tbl_merchant_keyword_rule` · `tbl_mission_certificate_title` · `tbl_user_mission_analysis`)
 마이그레이션까지 들어갔는지 확인: `mysql -u tangtang -p tangtang -e "DESC tbl_user"` → `social_name` · `tutorial_seen_at` 이 보여야 한다
 연결 확인: `GET http://localhost:8080/api/health` → `{"success":true,"data":{"status":"UP",...}}`
 

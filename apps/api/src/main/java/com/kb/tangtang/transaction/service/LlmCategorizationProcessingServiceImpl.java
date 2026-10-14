@@ -4,6 +4,7 @@ import com.kb.tangtang.transaction.client.llm.CategoryAssignmentDto;
 import com.kb.tangtang.transaction.client.llm.LlmClassificationClient;
 import com.kb.tangtang.transaction.domain.Category;
 import com.kb.tangtang.transaction.domain.CategorySource;
+import com.kb.tangtang.transaction.domain.DirectoryHint;
 import com.kb.tangtang.transaction.domain.LlmJobStatus;
 import com.kb.tangtang.transaction.domain.Transaction;
 import com.kb.tangtang.transaction.mapper.CategoryMapper;
@@ -17,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -39,6 +41,7 @@ public class LlmCategorizationProcessingServiceImpl implements LlmCategorization
     private final TransactionMapper transactionMapper;
     private final CategoryMapper categoryMapper;
     private final LlmClassificationClient client;
+    private final MerchantDirectoryService merchantDirectoryService;
     private final LlmCategorizationJobStateService jobStateService;
     private final Clock clock;
 
@@ -48,9 +51,10 @@ public class LlmCategorizationProcessingServiceImpl implements LlmCategorization
                                                    TransactionMapper transactionMapper,
                                                    CategoryMapper categoryMapper,
                                                    LlmClassificationClient client,
+                                                   MerchantDirectoryService merchantDirectoryService,
                                                    LlmCategorizationJobStateService jobStateService) {
-        this(jobMapper, jobItemMapper, transactionMapper, categoryMapper, client, jobStateService,
-                Clock.systemDefaultZone());
+        this(jobMapper, jobItemMapper, transactionMapper, categoryMapper, client, merchantDirectoryService,
+                jobStateService, Clock.systemDefaultZone());
     }
 
     /** 테스트에서 시간을 고정하기 위한 생성자. */
@@ -59,6 +63,7 @@ public class LlmCategorizationProcessingServiceImpl implements LlmCategorization
                                            TransactionMapper transactionMapper,
                                            CategoryMapper categoryMapper,
                                            LlmClassificationClient client,
+                                           MerchantDirectoryService merchantDirectoryService,
                                            LlmCategorizationJobStateService jobStateService,
                                            Clock clock) {
         this.jobMapper = jobMapper;
@@ -66,6 +71,7 @@ public class LlmCategorizationProcessingServiceImpl implements LlmCategorization
         this.transactionMapper = transactionMapper;
         this.categoryMapper = categoryMapper;
         this.client = client;
+        this.merchantDirectoryService = merchantDirectoryService;
         this.jobStateService = jobStateService;
         this.clock = clock;
     }
@@ -106,7 +112,12 @@ public class LlmCategorizationProcessingServiceImpl implements LlmCategorization
             Set<Long> validCategoryIds = categories.stream().map(Category::getId).collect(Collectors.toSet());
             Set<Long> jobTransactionIds = Set.copyOf(transactionIds);
 
-            List<CategoryAssignmentDto> assignments = client.classify(transactions, categories);
+            /*
+             * 상가(상권)정보 근거. 조회 실패·사전 미적재면 빈 맵이 와서 지금과 똑같이 분류된다
+             * (MerchantDirectoryService 가 예외를 삼킨다 — 힌트 때문에 작업이 FAILED 가 되지 않는다).
+             */
+            Map<Long, DirectoryHint> hints = merchantDirectoryService.findHints(transactions);
+            List<CategoryAssignmentDto> assignments = client.classify(transactions, categories, hints);
 
             for (CategoryAssignmentDto assignment : assignments) {
                 if (assignment.getCategoryId() == null) {

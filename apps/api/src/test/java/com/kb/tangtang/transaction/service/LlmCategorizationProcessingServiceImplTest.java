@@ -3,6 +3,7 @@ package com.kb.tangtang.transaction.service;
 import com.kb.tangtang.transaction.client.llm.CategoryAssignmentDto;
 import com.kb.tangtang.transaction.client.llm.LlmClassificationClient;
 import com.kb.tangtang.transaction.domain.Category;
+import com.kb.tangtang.transaction.domain.DirectoryHint;
 import com.kb.tangtang.transaction.domain.Transaction;
 import com.kb.tangtang.transaction.mapper.CategoryMapper;
 import com.kb.tangtang.transaction.mapper.LlmCategorizationJobItemMapper;
@@ -17,6 +18,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -35,6 +37,7 @@ class LlmCategorizationProcessingServiceImplTest {
     private TransactionMapper transactionMapper;
     private CategoryMapper categoryMapper;
     private LlmClassificationClient client;
+    private MerchantDirectoryService merchantDirectoryService;
     private LlmCategorizationJobStateService jobStateService;
     private LlmCategorizationProcessingServiceImpl service;
 
@@ -45,11 +48,13 @@ class LlmCategorizationProcessingServiceImplTest {
         transactionMapper = mock(TransactionMapper.class);
         categoryMapper = mock(CategoryMapper.class);
         client = mock(LlmClassificationClient.class);
+        merchantDirectoryService = mock(MerchantDirectoryService.class);
         jobStateService = mock(LlmCategorizationJobStateService.class);
         Clock clock = Clock.fixed(Instant.parse("2026-08-13T00:00:00Z"), ZoneId.of("Asia/Seoul"));
 
         service = new LlmCategorizationProcessingServiceImpl(
-                jobMapper, jobItemMapper, transactionMapper, categoryMapper, client, jobStateService, clock);
+                jobMapper, jobItemMapper, transactionMapper, categoryMapper, client,
+                merchantDirectoryService, jobStateService, clock);
 
         when(jobStateService.claimProcessing(eq(1L), any())).thenReturn(1);
         when(categoryMapper.findAll()).thenReturn(List.of(
@@ -63,7 +68,7 @@ class LlmCategorizationProcessingServiceImplTest {
         when(transactionMapper.findByIds(List.of(10L, 11L))).thenReturn(List.of(
                 Transaction.builder().id(10L).merchantName("스타벅스").build(),
                 Transaction.builder().id(11L).merchantName("정체불명").build()));
-        when(client.classify(any(), any())).thenReturn(List.of(
+        when(client.classify(any(), any(), any())).thenReturn(List.of(
                 CategoryAssignmentDto.builder().transactionId(10L).categoryId(5L).build(),
                 CategoryAssignmentDto.builder().transactionId(11L).categoryId(null).build()));
         when(transactionMapper.updateCategory(10L, 5L, "LLM")).thenReturn(1);
@@ -92,7 +97,7 @@ class LlmCategorizationProcessingServiceImplTest {
         when(jobItemMapper.findTransactionIdsByJobId(1L)).thenReturn(List.of(10L));
         when(transactionMapper.findByIds(List.of(10L))).thenReturn(List.of(
                 Transaction.builder().id(10L).merchantName("스타벅스").build()));
-        when(client.classify(any(), any())).thenReturn(List.of(
+        when(client.classify(any(), any(), any())).thenReturn(List.of(
                 CategoryAssignmentDto.builder().transactionId(10L).categoryId(5L).build()));
 
         service.processJob(1L);
@@ -103,7 +108,7 @@ class LlmCategorizationProcessingServiceImplTest {
         InOrder order = inOrder(jobStateService, jobItemMapper, client, jobMapper);
         order.verify(jobStateService).claimProcessing(eq(1L), any());
         order.verify(jobItemMapper).findTransactionIdsByJobId(1L);
-        order.verify(client).classify(any(), any());
+        order.verify(client).classify(any(), any(), any());
         order.verify(jobMapper).markFinished(eq(1L), eq("COMPLETED"), any());
     }
 
@@ -117,7 +122,7 @@ class LlmCategorizationProcessingServiceImplTest {
         verify(jobItemMapper, never()).findTransactionIdsByJobId(anyLong());
         verify(transactionMapper, never()).findByIds(any());
         verify(categoryMapper, never()).findAll();
-        verify(client, never()).classify(any(), any());
+        verify(client, never()).classify(any(), any(), any());
         verify(jobMapper, never()).markFinished(anyLong(), any(), any());
         verify(jobStateService, never()).markFailed(anyLong(), any());
     }
@@ -128,7 +133,7 @@ class LlmCategorizationProcessingServiceImplTest {
         when(jobItemMapper.findTransactionIdsByJobId(1L)).thenReturn(List.of(10L));
         when(transactionMapper.findByIds(List.of(10L))).thenReturn(List.of(
                 Transaction.builder().id(10L).merchantName("스타벅스").build()));
-        when(client.classify(any(), any())).thenReturn(List.of(
+        when(client.classify(any(), any(), any())).thenReturn(List.of(
                 CategoryAssignmentDto.builder().transactionId(10L).categoryId(9999L).build()));
 
         service.processJob(1L);
@@ -145,7 +150,7 @@ class LlmCategorizationProcessingServiceImplTest {
                 Transaction.builder().id(10L).merchantName("스타벅스").build()));
         /* 77L 은 다른 사용자·다른 작업의 거래다 — updateCategory 에는 사용자 범위 조건이 없으므로
            여기서 막지 않으면 남의 거래 카테고리를 덮어쓴다. */
-        when(client.classify(any(), any())).thenReturn(List.of(
+        when(client.classify(any(), any(), any())).thenReturn(List.of(
                 CategoryAssignmentDto.builder().transactionId(77L).categoryId(5L).build(),
                 CategoryAssignmentDto.builder().transactionId(10L).categoryId(5L).build()));
 
@@ -165,7 +170,7 @@ class LlmCategorizationProcessingServiceImplTest {
 
         /* findByIds 에 빈 목록을 넘기면 `WHERE id IN ()` 으로 SQL 이 깨진다. 애초에 부르지 않는다. */
         verify(transactionMapper, never()).findByIds(any());
-        verify(client, never()).classify(any(), any());
+        verify(client, never()).classify(any(), any(), any());
         verify(jobMapper).markFinished(eq(1L), eq("COMPLETED"), any());
         verify(jobStateService, never()).markFailed(anyLong(), any());
     }
@@ -176,7 +181,7 @@ class LlmCategorizationProcessingServiceImplTest {
         when(jobItemMapper.findTransactionIdsByJobId(1L)).thenReturn(List.of(10L));
         when(transactionMapper.findByIds(List.of(10L))).thenReturn(List.of(
                 Transaction.builder().id(10L).merchantName("스타벅스").build()));
-        when(client.classify(any(), any())).thenThrow(new RuntimeException("network error"));
+        when(client.classify(any(), any(), any())).thenThrow(new RuntimeException("network error"));
 
         assertThrows(RuntimeException.class, () -> service.processJob(1L));
 
@@ -192,5 +197,21 @@ class LlmCategorizationProcessingServiceImplTest {
         order.verify(jobStateService).claimProcessing(eq(1L), any());
         order.verify(jobStateService).markFailed(eq(1L), any());
         verify(jobMapper, never()).markFinished(anyLong(), eq("FAILED"), any());
+    }
+
+    @Test
+    @DisplayName("분류할 거래로 힌트를 조회해 client 에 그대로 넘긴다")
+    void passesDirectoryHintsToClient() {
+        List<Transaction> transactions = List.of(Transaction.builder().id(10L).merchantName("성민식당").build());
+        Map<Long, DirectoryHint> hints = Map.of(10L, DirectoryHint.builder()
+                .matchType(DirectoryHint.EXACT).matchedName("성민식당").build());
+        when(jobItemMapper.findTransactionIdsByJobId(1L)).thenReturn(List.of(10L));
+        when(transactionMapper.findByIds(List.of(10L))).thenReturn(transactions);
+        when(merchantDirectoryService.findHints(transactions)).thenReturn(hints);
+        when(client.classify(any(), any(), any())).thenReturn(List.of());
+
+        service.processJob(1L);
+
+        verify(client).classify(eq(transactions), any(), eq(hints));
     }
 }

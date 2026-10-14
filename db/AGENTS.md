@@ -12,6 +12,7 @@
 | `seed_category.sql` | 소비 카테고리 (대분류 12 · 소분류 46). 아래 시드들이 이름으로 참조하므로 **선행 필수** |
 | `seed_mission_pool.sql` | 데일리 미션 풀. 비어 있으면 미션 배정 자체가 안 된다 |
 | `seed_merchant_keyword_rule.sql` | 가맹점명 키워드 → 카테고리 규칙(선택). 비어 있으면 카테고리화 4단계가 항상 미스로 넘어간다 |
+| `merchant_directory/` | 상가(상권)정보 상호 사전 생성·적재 도구(선택). 비어 있으면 LLM 카테고리화가 힌트 없이 기존과 똑같이 동작한다. `README.md` 참고 |
 | `seed_notification_demo.sql` | 알림 화면 시연용 데이터 (선택, 팀 공용 seed와 분리) |
 | `seed_local_demo.sql` | 로컬 시연·검증용 한 방 시드 (선택). 아래 「로컬 시연 데이터」 참고 |
 | `seed_demo_transactions.sql` | **구버전.** 거래내역만 넣는다. `seed_local_demo.sql` 이 이걸 포함하므로 새로 쓸 일은 없다 |
