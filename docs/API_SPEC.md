@@ -294,8 +294,9 @@
 사용자 식별은 전부 `@LoginUser` 로만 한다 — 요청 본문·쿼리로 `userId` 를 받는 엔드포인트는 없다.
 
 **어느 금융 데이터 공급자(목서버 / 실 CODEF)가 붙었는지 프론트는 알지 못한다.**
-`financial.client` 프로퍼티가 정하고, 화면은 `GET /api/accounts/link/auth-methods` 응답만 보고 인증 화면을 고른다.
-(DECISIONS.md 2026-08-05)
+`financial.client` 프로퍼티(`mock` · `codef` · `hybrid`)가 정하고, 화면은 `GET /api/accounts/link/auth-methods` 응답만 보고 인증 화면을 고른다.
+`hybrid` 에서는 **사용자마다** 다르다 — `tbl_user.financial_data_source='CODEF'` 인 사용자만 실 CODEF(기관 로그인), 나머지는 목서버(간편인증)다.
+그래서 `auth-methods`·`institutions` 응답이 사용자별로 달라질 수 있다. (DECISIONS.md 2026-08-05)
 
 ### 1단계 — 기관 선택
 
@@ -305,7 +306,8 @@
 
 - `connected: true` 는 **이미 연결된 기관**이라는 표시일 뿐 선택은 막지 않는다 — 같은 은행의 두 번째 계좌 추가와 재연동이 막히기 때문이다. 중복은 4단계의 `alreadyLinked` 가 막는다.
 - 업권은 **5종**이다(응답 필드 순서 = 화면 칩 순서). 대출은 마이데이터에서 독립 업권이 아니라 은행 업권 산하 상품이므로, `loans` 에는 **할부금융(캐피탈)·저축은행**이 들어간다. 은행 대출은 은행을 연결하면 함께 조회된다.
-- `loans` · `payMoney` 의 기관 코드는 **CODEF organization 코드가 아니다**(해당 업권 코드를 확인하지 못해 자체 코드를 쓴다). 실 CODEF 로 전환하면 매핑이 필요하고, 그전까지는 `supportedOrganizations` 가 은행 20곳만 허용해 두 업권이 자동으로 빈 배열이 된다.
+- `loans` · `payMoney` 의 기관 코드는 **CODEF organization 코드가 아니다**(해당 업권 코드를 확인하지 못해 자체 코드를 쓴다). 실 CODEF 사용자에게는 `supportedOrganizations` 가 은행 20곳 + 카드사 6곳만 허용해 두 업권이 자동으로 빈 배열이 된다. 은행 대출은 은행을 연결하면 함께 조회된다.
+- `cards` 의 기관 코드도 목서버 코드다(0301=신한카드 등). **CODEF 카드 코드와 숫자가 겹치면서 뜻이 다르므로**(CODEF 0301=KB카드) 실 CODEF 로 나가는 순간 `CodefOrganizations` 가 바꾼다. 화면·DB 는 계속 이 목록의 코드를 쓴다.
 - 공급자가 다루지 못하는 기관은 목록에서 아예 빠진다(`supportedOrganizations`. 빈 집합이면 "제한 없음").
 - **보험은 연동 범위에서 제외됐다(2026-08-06).** 되살리려면 `InstitutionCatalog` 부터 손봐야 한다.
 
@@ -649,9 +651,13 @@
 - 환불 거래(`is_refund=1`)는 일반 거래와 동일하게 규칙 1~4단계를 적용하되, 전부 미스하면 LLM 대상에서는 제외한다. 원거래 카테고리를 그대로 물려받는(계승) 처리는 **후속 작업**이다.
 - `tbl_merchant_category_map`(공용 캐시)에 대한 write-back(3·4단계 판정 결과를 다시 채워 넣는 것)은 이번 범위가 아니다 — 비어 있으면 2단계는 항상 미스로 3단계로 넘어간다.
 - 정기 동기화 스케줄러, 연결된 전체 사용자 대상 자동 동기화, 증분 동기화 조회 범위 변경도 이번 범위 밖이다.
-- `financial.client=codef` 전환은 **계좌 연동(1~5단계) 흐름에만 적용된다.** 이 엔드포인트는
-  `FinancialSyncClientConfig` 가 항상 목서버 클라이언트로 고정 배선돼 있어, 실 CODEF 로 전환해도
-  이 동기화는 계속 목서버를 호출한다.
+- 실 CODEF 사용자(`codef` 모드 전체, `hybrid` 의 CODEF 사용자)는 이 동기화도 **실 CODEF** 를 부른다
+  (`CodefFinancialSyncClient`). 은행 수시입출·적금·대출 거래, 카드 보유·승인·청구를 가져온다.
+  증권은 범위 밖이고 페이머니는 CODEF 개인 상품이 없어 **빈 결과**다 — 목서버 데이터를 섞지 않는다.
+  CODEF 연결(connectedId)은 계좌 연동 3단계에서 기관별로 암호화해 `tbl_codef_connection` 에 남긴다.
+- 실 CODEF 사용자의 자동 동기화 간격은 `financial.codef.sync.min-interval-minutes`(기본 360분)를 따른다
+  — CODEF 는 배치형 과다 호출 시 IP 를 차단한다고 경고한다. 수동 호출(이 엔드포인트)에는 적용되지 않는다.
+- 실 CODEF 는 기관 단위로 실패를 넘긴다 — 한 은행이 점검 중이어도 나머지 기관 결과는 저장한다. 모든 기관이 실패할 때만 실패로 응답한다.
 
 ### 금융 데이터 동기화 에러 코드
 
