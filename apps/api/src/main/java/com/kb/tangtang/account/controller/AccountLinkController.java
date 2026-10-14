@@ -45,8 +45,8 @@ public class AccountLinkController implements AccountLinkControllerDocs {
 
     /** 지원 인증 수단. 프론트 분기의 유일한 근거다. */
     @GetMapping("/link/auth-methods")
-    public ApiResponse<AuthMethodListDto> authMethods() {
-        return ApiResponse.ok(accountLinkService.authMethods());
+    public ApiResponse<AuthMethodListDto> authMethods(@LoginUser Long userId) {
+        return ApiResponse.ok(accountLinkService.authMethods(userId));
     }
 
     /** 간편인증 요청 */

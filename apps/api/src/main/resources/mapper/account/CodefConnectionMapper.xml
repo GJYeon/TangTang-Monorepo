@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.kb.tangtang.account.mapper.CodefConnectionMapper">
+
+    <sql id="columns">
+        id, user_id, organization, business_type, connected_id_encrypted
+    </sql>
+
+    <insert id="upsert" parameterType="com.kb.tangtang.account.domain.CodefConnection">
+        INSERT INTO tbl_codef_connection (user_id, organization, business_type, connected_id_encrypted)
+        VALUES (#{userId}, #{organization}, #{businessType}, #{connectedIdEncrypted})
+        ON DUPLICATE KEY UPDATE
+            business_type          = VALUES(business_type),
+            connected_id_encrypted = VALUES(connected_id_encrypted),
+            is_active              = 1
+    </insert>
+
+    <select id="findActiveByUser" resultType="com.kb.tangtang.account.domain.CodefConnection">
+        SELECT <include refid="columns"/>
+          FROM tbl_codef_connection
+         WHERE user_id = #{userId}
+           AND is_active = 1
+         ORDER BY organization
+    </select>
+
+    <select id="findActive" resultType="com.kb.tangtang.account.domain.CodefConnection">
+        SELECT <include refid="columns"/>
+          FROM tbl_codef_connection
+         WHERE user_id = #{userId}
+           AND organization = #{organization}
+           AND is_active = 1
+    </select>
+
+    <update id="deactivateAllByUser">
+        UPDATE tbl_codef_connection
+           SET is_active = 0
+         WHERE user_id = #{userId}
+    </update>
+</mapper>

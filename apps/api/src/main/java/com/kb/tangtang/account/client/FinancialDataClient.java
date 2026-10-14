@@ -52,6 +52,16 @@ public interface FinancialDataClient {
         return java.util.Set.of();
     }
 
+    /**
+     * 승인된 연결을 서버 재시작 뒤에도 다시 쓸 수 있게 하는 공급자 쪽 식별자(실 CODEF connectedId).
+     *
+     * **비어 있으면 남길 것이 없다는 뜻이다.** 목서버는 시나리오 키로 사용자를 식별하므로 비워 둔다.
+     * 값이 있으면 AccountLinkService 가 기관 단위로 암호화해 저장하고, 동기화가 그 값으로 CODEF 를 부른다.
+     */
+    default java.util.Optional<String> connectedIdOf(String connectionId) {
+        return java.util.Optional.empty();
+    }
+
     /** 연결(인증) 요청 */
     ConnectionResult createConnection(ConnectionRequest request);
 

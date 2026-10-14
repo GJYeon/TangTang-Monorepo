@@ -42,8 +42,9 @@ public interface AccountLinkControllerDocs {
     /* ── 2단계: 인증 ────────────────────────────────────── */
 
     @ApiOperation(value = "[2단계] 지원 인증 수단 목록",
-            notes = "**프론트 분기의 유일한 근거다.** 간편인증과 기관 로그인 중 무엇을 띄울지 여기서 정해진다.")
-    ApiResponse<AuthMethodListDto> authMethods();
+            notes = "**프론트 분기의 유일한 근거다.** 간편인증과 기관 로그인 중 무엇을 띄울지 여기서 정해진다. "
+                    + "hybrid 모드에서는 사용자마다(목서버/실 CODEF) 결과가 다르다.")
+    ApiResponse<AuthMethodListDto> authMethods(@ApiIgnore Long userId);
 
     @ApiOperation(value = "[2단계] 간편인증 요청",
             notes = "카카오·네이버 등 간편인증 앱으로 인증 요청을 보낸다. "

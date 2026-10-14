@@ -49,14 +49,21 @@ openai.read-timeout-millis=15000
 # 데모 환경 주소는 https://development.codef.io 다.
 # public-key 는 CODEF 마이페이지 > 키 관리의 공개키(헤더 없는 Base64 한 줄).
 #
-#   financial.client=codef
+#   financial.client=hybrid
 #   financial.codef.base-url=https://development.codef.io
 #   financial.codef.client-id=...
 #   financial.codef.client-secret=...
 #   financial.codef.public-key=...
 #
-# public-key 가 없으면 codef 모드 기동 시 즉시 실패한다 —
+# public-key 가 없으면 codef/hybrid 모드 기동 시 즉시 실패한다 —
 # CODEF 는 평문 비밀번호를 거부하므로 이 값 없이는 인증이 성립하지 않는다.
+#
+# 모드: mock(모두 목서버) · codef(모두 실 CODEF) · hybrid(사용자별)
+# hybrid 는 목서버 시연 사용자를 그대로 두고 **실계좌로 시연할 사용자만** CODEF 로 돌린다:
+#   UPDATE tbl_user SET financial_data_source='CODEF' WHERE id=...;
+# (db/migration/20261014_add_codef_hybrid_source.sql 이 먼저 적용돼 있어야 한다)
+# 그 사용자는 계좌 연동 화면에서 기관 로그인(아이디·비밀번호)으로 은행·카드를 연결한다.
+# 증권·페이머니는 실 CODEF 로 가져오지 않는다(증권은 범위 밖, 페이머니는 CODEF 상품 없음).
 
 
 # ── 미션 자동 배정 시간(선택) ──────────────────────────────

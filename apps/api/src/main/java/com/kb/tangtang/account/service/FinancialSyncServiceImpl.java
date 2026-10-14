@@ -875,7 +875,12 @@ public class FinancialSyncServiceImpl implements FinancialSyncService {
                                    Set<String> inactiveKeys) {
         String accountType = "SAVINGS".equalsIgnoreCase(account.getAccountTypeCode())
                 ? "SAVINGS" : "DEMAND_DEPOSIT";
-        String accountNoEncrypted = accountNumbers.hash(account.getInstitutionCode(), account.getAccountNoMasked());
+        /*
+         * 실 CODEF 는 전체 계좌번호를 준다(accountNoRaw). 계좌 연동도 전체 번호로 해시하므로 그걸 써야
+         * 같은 행으로 모인다 — 마스킹 번호로 해시하면 같은 실계좌가 두 행이 된다. 목서버는 null 이다.
+         */
+        String hashInput = account.getAccountNoRaw() != null ? account.getAccountNoRaw() : account.getAccountNoMasked();
+        String accountNoEncrypted = accountNumbers.hash(account.getInstitutionCode(), hashInput);
         ConnectedAccount row = ConnectedAccount.builder()
                 .userId(userId)
                 .bankCode(account.getInstitutionCode())

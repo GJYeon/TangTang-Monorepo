@@ -1,6 +1,8 @@
 package com.kb.tangtang.account.service;
 
+import com.kb.tangtang.account.client.CodefConnectionStore;
 import com.kb.tangtang.account.client.FinancialDataClient;
+import com.kb.tangtang.account.client.FinancialDataClientResolver;
 import com.kb.tangtang.account.client.dto.ConnectionRequest;
 import com.kb.tangtang.account.client.dto.ConnectionResult;
 import com.kb.tangtang.account.client.dto.FinancialAccountDto;
@@ -57,6 +59,7 @@ class AccountLinkServiceTest {
     private static final long BATCH_FIXED_DELAY_MS = 1_800_000L;
 
     private FinancialDataClient client;
+    private CodefConnectionStore codefConnections;
     private ConnectedAccountMapper mapper;
     private LoanMapper loanMapper;
     private CardMapper cardMapper;
@@ -80,7 +83,9 @@ class AccountLinkServiceTest {
         consentService = mock(ConsentService.class);
         syncClient = mock(FinancialSyncClient.class);
         scenarioKeyProvider = mock(ScenarioKeyProvider.class);
-        service = new AccountLinkService(client, mapper, loanMapper, cardMapper, store,
+        codefConnections = mock(CodefConnectionStore.class);
+        service = new AccountLinkService(FinancialDataClientResolver.fixed(client), codefConnections,
+                mapper, loanMapper, cardMapper, store,
                 new InstitutionCatalog(),
                 new AccountNumberPolicy("test-secret-key-for-account-hash-0001"),
                 syncClient, scenarioKeyProvider, capturingPublisher,
@@ -128,7 +133,7 @@ class AccountLinkServiceTest {
         when(client.supportedAuthMethods()).thenReturn(List.of(AuthMethod.SIMPLE_AUTH));
         when(client.simpleAuthProviders()).thenReturn(List.of("KAKAO"));
 
-        AuthMethodListDto result = service.authMethods();
+        AuthMethodListDto result = service.authMethods(USER_ID);
 
         assertEquals(1, result.getMethods().size());
         assertEquals("SIMPLE_AUTH", result.getMethods().get(0).getType());
@@ -247,6 +252,55 @@ class AccountLinkServiceTest {
         assertTrue(done.isDone());
         assertEquals("FAILED", done.getInstitutions().get(0).getStatus());
         assertEquals("DONE", done.getInstitutions().get(1).getStatus());
+    }
+
+    @Test
+    @DisplayName("실 CODEF 연결은 조회에 성공한 기관만 connectedId 를 남긴다 — 재시작 뒤 동기화가 쓴다")
+    void savesCodefConnectionPerSucceededInstitution() {
+        when(client.createConnection(any())).thenReturn(approvedConnection(List.of("0004", "0088")));
+        when(client.getAuthStatus("conn-1")).thenReturn(AuthStatus.APPROVED);
+        when(client.connectedIdOf("conn-1")).thenReturn(java.util.Optional.of("codef-real-id"));
+        when(client.fetchAccounts(USER_ID, "conn-1", "0004"))
+                .thenThrow(new BusinessException("EXTERNAL_API_UNAVAILABLE", "점검 중"));
+        when(client.fetchAccounts(USER_ID, "conn-1", "0088"))
+                .thenReturn(List.of(account("0088", "신한 주거래", "110987654321")));
+
+        SimpleAuthRequestDto request = new SimpleAuthRequestDto();
+        request.setProvider("KAKAO");
+        request.setOrganizations(List.of("0004", "0088"));
+        service.requestSimpleAuth(USER_ID, request);
+        service.progress(USER_ID, "conn-1");
+        service.progress(USER_ID, "conn-1");
+
+        verify(codefConnections).save(USER_ID, "0088", "codef-real-id");
+        verify(codefConnections, never()).save(eq(USER_ID), eq("0004"), anyString());
+    }
+
+    @Test
+    @DisplayName("목서버 연결은 남길 connectedId 가 없다")
+    void mockConnectionSavesNothing() {
+        when(client.createConnection(any())).thenReturn(approvedConnection(List.of("0004")));
+        when(client.getAuthStatus("conn-1")).thenReturn(AuthStatus.APPROVED);
+        when(client.connectedIdOf("conn-1")).thenReturn(java.util.Optional.empty());
+        when(client.fetchAccounts(USER_ID, "conn-1", "0004"))
+                .thenReturn(List.of(account("0004", "입출금통장", "110123456723")));
+
+        SimpleAuthRequestDto request = new SimpleAuthRequestDto();
+        request.setProvider("KAKAO");
+        request.setOrganizations(List.of("0004"));
+        service.requestSimpleAuth(USER_ID, request);
+        service.progress(USER_ID, "conn-1");
+
+        verifyNoInteractions(codefConnections);
+    }
+
+    @Test
+    @DisplayName("금융정보 동의 철회로 전체 해제하면 CODEF 연결도 끈다 — 배치가 계속 부르지 않게")
+    void disconnectAllDeactivatesCodefConnections() {
+        service.disconnectAll(USER_ID);
+
+        verify(codefConnections).deactivateAll(USER_ID);
+        verify(mapper).deactivateAllByUser(USER_ID);
     }
 
     @Test

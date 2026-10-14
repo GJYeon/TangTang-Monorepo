@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.kb.tangtang.account.client.FinancialSourceResolver;
 import com.kb.tangtang.account.mapper.ConnectedAccountMapper;
 
 /**
@@ -39,18 +40,42 @@ public class FinancialSyncBatchScheduler {
     private final int maxUsersPerTick;
     /** 재동기화 쿨다운(분). 마지막 동기화 시도가 이보다 최근인 사용자는 이번 틱에서 뺀다(이슈 #199 최종 리뷰). */
     private final int minIntervalMinutes;
+    /**
+     * 실 CODEF 사용자의 쿨다운(분). CODEF 는 "배치형 서비스 또는 비정상 호출로 간주될 경우 IP 가 차단될 수 있다"
+     * 고 경고한다(상품 문서 Summary) — 목서버 주기(10분)로 돌리면 안 된다. 수동 새로고침은 이 값과 무관하다.
+     */
+    private final int codefMinIntervalMinutes;
+    /** NONE · ALL · FLAGGED — financial.client 모드에서 정해진다(ConnectedAccountMapper.xml 참고). */
+    private final String codefScope;
 
     @Autowired
     public FinancialSyncBatchScheduler(ConnectedAccountMapper connectedAccountMapper,
                                        FinancialSyncService financialSyncService,
+                                       FinancialSourceResolver sources,
                                        @Value("${financial.sync.batch.enabled}") boolean enabled,
                                        @Value("${financial.sync.batch.max-users-per-tick}") int maxUsersPerTick,
-                                       @Value("${financial.sync.batch.min-interval-minutes}") int minIntervalMinutes) {
+                                       @Value("${financial.sync.batch.min-interval-minutes}") int minIntervalMinutes,
+                                       @Value("${financial.codef.sync.min-interval-minutes:360}") int codefMinIntervalMinutes) {
         this.connectedAccountMapper = connectedAccountMapper;
         this.financialSyncService = financialSyncService;
         this.enabled = enabled;
         this.maxUsersPerTick = maxUsersPerTick;
         this.minIntervalMinutes = minIntervalMinutes;
+        this.codefMinIntervalMinutes = codefMinIntervalMinutes;
+        this.codefScope = switch (sources.mode()) {
+            case MOCK -> "NONE";
+            case CODEF -> "ALL";
+            case HYBRID -> "FLAGGED";
+        };
+    }
+
+    /** 목 모드 전용(테스트). CODEF 사용자가 없으므로 CODEF 쿨다운은 쓰이지 않는다. */
+    FinancialSyncBatchScheduler(ConnectedAccountMapper connectedAccountMapper,
+                                FinancialSyncService financialSyncService,
+                                boolean enabled, int maxUsersPerTick, int minIntervalMinutes) {
+        this(connectedAccountMapper, financialSyncService,
+                new FinancialSourceResolver(FinancialSourceResolver.Mode.MOCK, null),
+                enabled, maxUsersPerTick, minIntervalMinutes, minIntervalMinutes);
     }
 
     @Scheduled(fixedDelayString = "${financial.sync.batch.fixed-delay-ms}")
@@ -58,7 +83,8 @@ public class FinancialSyncBatchScheduler {
         if (!enabled) {
             return;
         }
-        for (Long userId : connectedAccountMapper.findUserIdsDueForSync(minIntervalMinutes, maxUsersPerTick)) {
+        for (Long userId : connectedAccountMapper.findUserIdsDueForSync(
+                minIntervalMinutes, codefMinIntervalMinutes, codefScope, maxUsersPerTick)) {
             try {
                 financialSyncService.sync(userId);
             } catch (Exception e) {

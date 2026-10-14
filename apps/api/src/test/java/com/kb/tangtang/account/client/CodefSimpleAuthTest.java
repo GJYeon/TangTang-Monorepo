@@ -70,15 +70,21 @@ class CodefSimpleAuthTest {
                 restTemplate, BASE, "id", "secret", new CodefPasswordCipher(publicKey()));
     }
 
+    /** 토큰은 처음 한 번만 받는다(CodefHttpClient 가 6일간 캐시한다). */
+    private boolean tokenIssued;
+
     /**
-     * 한 번의 CODEF 호출을 흉내낸다 — 우리 클라이언트는 매번 **토큰 발급 → 본 요청** 두 번을 부른다.
+     * 한 번의 CODEF 호출을 흉내낸다 — 첫 호출만 **토큰 발급 → 본 요청** 두 번이고, 이후는 본 요청뿐이다.
      * once() 로 등록해 순서대로 정확히 소비되게 한다(manyTimes 를 쓰면 첫 응답이 계속 매칭된다).
      */
     private void expectCall(String body) {
-        server.expect(once(), anything())
-                .andRespond(withSuccess("""
-                        {"access_token":"t"}
-                        """, MediaType.APPLICATION_JSON));
+        if (!tokenIssued) {
+            server.expect(once(), anything())
+                    .andRespond(withSuccess("""
+                            {"access_token":"t"}
+                            """, MediaType.APPLICATION_JSON));
+            tokenIssued = true;
+        }
         server.expect(once(), anything())
                 .andRespond(withSuccess(body, MediaType.APPLICATION_JSON));
     }
@@ -215,7 +221,7 @@ class CodefSimpleAuthTest {
     @DisplayName("기관이 그 인증 방식을 지원하지 않으면 무엇을 하면 되는지 알려준다")
     void explainsUnsupportedLoginType() {
         /* 실제로 받은 응답 형태 — 카카오뱅크(0090) + 간편인증 (2026-08-05). */
-        BusinessException e = CodefFinancialDataClient.failure(
+        BusinessException e = CodefHttpClient.failure(
                 Map.of("code", "CF-04000", "message", "사용자 계정정보 등록에 실패했습니다."),
                 Map.of("data", Map.of("errorList", List.of(Map.of(
                         "organization", "0090",
@@ -230,7 +236,7 @@ class CodefSimpleAuthTest {
     @Test
     @DisplayName("모르는 실패는 CODEF 메시지를 그대로 전한다")
     void keepsUnknownFailureMessage() {
-        BusinessException e = CodefFinancialDataClient.failure(
+        BusinessException e = CodefHttpClient.failure(
                 Map.of("code", "CF-09999", "message", "점검 중입니다."), Map.of());
 
         assertEquals("EXTERNAL_API_ERROR", e.getCode());

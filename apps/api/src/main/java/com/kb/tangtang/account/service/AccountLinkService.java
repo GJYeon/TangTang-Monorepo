@@ -1,6 +1,8 @@
 package com.kb.tangtang.account.service;
 
+import com.kb.tangtang.account.client.CodefConnectionStore;
 import com.kb.tangtang.account.client.FinancialDataClient;
+import com.kb.tangtang.account.client.FinancialDataClientResolver;
 import com.kb.tangtang.account.client.dto.ConnectionRequest;
 import com.kb.tangtang.account.client.dto.ConnectionResult;
 import com.kb.tangtang.account.client.dto.CredentialDto;
@@ -63,7 +65,10 @@ public class AccountLinkService {
     /** 즉시 조회 쿨다운. 과도한 반복 호출을 막는다 (AC_02_03). */
     private static final int REFRESH_COOLDOWN_SECONDS = 150;
 
-    private final FinancialDataClient client;
+    /** 사용자별 계좌 연동 공급자(목서버/실 CODEF). hybrid 모드에서는 사용자마다 다르다. */
+    private final FinancialDataClientResolver clients;
+    /** 승인된 실 CODEF 연결(connectedId)을 기관 단위로 남기는 곳. 목서버 연결은 남길 것이 없다. */
+    private final CodefConnectionStore codefConnections;
     private final ConnectedAccountMapper mapper;
     private final LoanMapper loanMapper;
     /** 관리 목록의 카드 행과 카드 연결 해제용(#467). 카드 저장 자체는 FinancialSyncServiceImpl 이 한다. */
@@ -73,7 +78,7 @@ public class AccountLinkService {
     private final AccountNumberPolicy accountNumbers;
     /**
      * 대출·페이머니·카드 미리보기 전용(#334) — FinancialSyncServiceImpl 의 배치 동기화와 같은 클라이언트다.
-     * client(FinancialDataClient)는 fetchAccounts() 가 은행 엔드포인트만 알아 대출·페이머니·카드를 아예
+     * clients(FinancialDataClient)의 fetchAccounts() 는 은행 엔드포인트만 알아 대출·페이머니·카드를 아예
      * 못 본다. 계좌 선택 화면에 "이것도 연동됩니다"를 보여주려고 여기서만 직접 부른다 — 실제 연결
      * 저장은 이 미리보기가 아니라 최초 동기화(FinancialSyncService.sync(userId, extraCodes))가 한다.
      * 실 CODEF 모드에서는 대출·페이머니·카드 기관코드가 애초에 목록에 없어(onlySupported()) 이 경로를
@@ -104,7 +109,8 @@ public class AccountLinkService {
      * (2026-08-05 실제 발생 — 단위 테스트는 생성자를 직접 호출하므로 이 결함을 잡지 못한다)
      */
     @Autowired
-    public AccountLinkService(FinancialDataClient client,
+    public AccountLinkService(FinancialDataClientResolver clients,
+                              CodefConnectionStore codefConnections,
                               ConnectedAccountMapper mapper,
                               LoanMapper loanMapper,
                               CardMapper cardMapper,
@@ -116,12 +122,13 @@ public class AccountLinkService {
                               ApplicationEventPublisher events,
                               ConsentService consentService,
                               @Value("${financial.sync.batch.fixed-delay-ms}") long batchFixedDelayMs) {
-        this(client, mapper, loanMapper, cardMapper, progressStore, catalog, accountNumbers, syncClient,
-                scenarioKeyProvider, events, consentService, batchFixedDelayMs, Clock.systemDefaultZone());
+        this(clients, codefConnections, mapper, loanMapper, cardMapper, progressStore, catalog, accountNumbers,
+                syncClient, scenarioKeyProvider, events, consentService, batchFixedDelayMs, Clock.systemDefaultZone());
     }
 
     /** 테스트에서 시간을 고정하기 위한 생성자. */
-    AccountLinkService(FinancialDataClient client,
+    AccountLinkService(FinancialDataClientResolver clients,
+                       CodefConnectionStore codefConnections,
                        ConnectedAccountMapper mapper,
                        LoanMapper loanMapper,
                        CardMapper cardMapper,
@@ -134,7 +141,8 @@ public class AccountLinkService {
                        ConsentService consentService,
                        long batchFixedDelayMs,
                        Clock clock) {
-        this.client = client;
+        this.clients = clients;
+        this.codefConnections = codefConnections;
         this.mapper = mapper;
         this.loanMapper = loanMapper;
         this.cardMapper = cardMapper;
@@ -158,7 +166,7 @@ public class AccountLinkService {
                 .distinct()
                 .toList();
         /* 공급자가 다루지 못하는 기관은 아예 내려보내지 않는다 — 인증 수단과 같은 원칙이다. */
-        Set<String> supported = client.supportedOrganizations();
+        Set<String> supported = clients.forUser(userId).supportedOrganizations();
         /*
          * 대출·페이머니·카드도 같은 필터를 탄다. 실 CODEF 모드에서는 supportedOrganizations() 가
          * 은행 20곳만 돌려주므로 두 업권이 자동으로 빈 배열이 된다 — 의도한 동작이다.
@@ -203,7 +211,9 @@ public class AccountLinkService {
      * 지원 인증 수단. **프론트 분기의 유일한 근거다.**
      * 여기서 mock/codef 를 노출하면 "설정 교체만으로 전환" 이 거짓이 된다.
      */
-    public AuthMethodListDto authMethods() {
+    public AuthMethodListDto authMethods(long userId) {
+        /* hybrid 모드에서는 사용자마다 공급자가 달라 인증 수단도 다르다(목: 간편인증 · CODEF: 기관 로그인). */
+        FinancialDataClient client = clients.forUser(userId);
         List<AuthMethodDto> methods = new ArrayList<>();
         for (AuthMethod method : client.supportedAuthMethods()) {
             List<ProviderDto> providers = method == AuthMethod.SIMPLE_AUTH
@@ -235,7 +245,7 @@ public class AccountLinkService {
                 : request.getOrganizations();
         requireOrganizations(organizations);
 
-        ConnectionResult result = client.createConnection(ConnectionRequest.builder()
+        ConnectionResult result = clients.forUser(userId).createConnection(ConnectionRequest.builder()
                 .authMethod(AuthMethod.SIMPLE_AUTH)
                 .provider(request.getProvider())
                 .organizations(organizations)
@@ -280,7 +290,7 @@ public class AccountLinkService {
                 .toList();
         requireOrganizations(organizations);
 
-        ConnectionResult result = client.createConnection(ConnectionRequest.builder()
+        ConnectionResult result = clients.forUser(userId).createConnection(ConnectionRequest.builder()
                 .authMethod(AuthMethod.INSTITUTION_LOGIN)
                 .organizations(organizations)
                 .credentials(rows.stream()
@@ -299,7 +309,7 @@ public class AccountLinkService {
 
     public AuthStatusDto authStatus(long userId, String connectionId) {
         progressStore.get(userId, connectionId);
-        return AuthStatusDto.builder().status(client.getAuthStatus(connectionId).name()).build();
+        return AuthStatusDto.builder().status(clients.forUser(userId).getAuthStatus(connectionId).name()).build();
     }
 
     public ConnectionResponseDto submitExtraAuth(long userId, String connectionId,
@@ -308,7 +318,7 @@ public class AccountLinkService {
         if (request.getAuthCode() == null || request.getAuthCode().isBlank()) {
             throw new BusinessException("INVALID_CREDENTIALS", "인증번호를 입력해 주세요.");
         }
-        AuthStatus status = client.submitExtraAuth(connectionId, request.getAuthCode());
+        AuthStatus status = clients.forUser(userId).submitExtraAuth(connectionId, request.getAuthCode());
         return ConnectionResponseDto.builder()
                 .connectionId(connectionId)
                 .status(status.name())
@@ -331,6 +341,7 @@ public class AccountLinkService {
     public LinkProgressDto progress(long userId, String connectionId) {
         LinkProgress progress = progressStore.get(userId, connectionId);
 
+        FinancialDataClient client = clients.forUser(userId);
         if (client.getAuthStatus(connectionId) != AuthStatus.APPROVED) {
             /* 아직 승인 전이면 조회를 시작하지 않는다. */
             return toProgressDto(progress);
@@ -341,6 +352,13 @@ public class AccountLinkService {
             progress.mark(next, ProgressStatus.FETCHING);
             try {
                 List<FinancialAccountDto> accounts = client.fetchAccounts(userId, connectionId, next);
+                /*
+                 * 조회까지 성공한 기관만 연결로 남긴다(실 CODEF). 계좌 선택 화면의 카드·대출 미리보기와
+                 * 이후 동기화·「전체 즉시 조회」가 이 기록으로 CODEF 를 다시 부른다 — 메모리 세션은
+                 * 서버 재시작과 함께 사라진다.
+                 */
+                client.connectedIdOf(connectionId)
+                        .ifPresent(connectedId -> codefConnections.save(userId, next, connectedId));
                 progress.addAccounts(accounts);
                 progress.mark(next, ProgressStatus.DONE);
             } catch (RuntimeException e) {
@@ -995,7 +1013,7 @@ public class AccountLinkService {
         String connectionId = owned.get(0).getCodefConnectedId();
         Map<String, BigDecimal> fresh = new LinkedHashMap<>();
         try {
-            for (FinancialAccountDto found : client.fetchAccounts(userId, connectionId, bankCode)) {
+            for (FinancialAccountDto found : clients.forUser(userId).fetchAccounts(userId, connectionId, bankCode)) {
                 fresh.put(accountNumbers.hash(bankCode, found.getAccountNo()),
                         found.getBalance() == null ? BigDecimal.ZERO : found.getBalance());
             }
@@ -1064,6 +1082,8 @@ public class AccountLinkService {
     /** 금융정보 동의 철회 시 모든 연동을 해제한다 (이슈 #13 이 남긴 TODO(#12)). */
     @Transactional
     public int disconnectAll(long userId) {
+        /* 동의를 철회했는데 connectedId 가 살아 있으면 배치 동기화가 계속 CODEF 를 부른다. */
+        codefConnections.deactivateAll(userId);
         return mapper.deactivateAllByUser(userId);
     }
 

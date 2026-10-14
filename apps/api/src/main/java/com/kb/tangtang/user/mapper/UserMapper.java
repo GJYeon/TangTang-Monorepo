@@ -27,6 +27,13 @@ public interface UserMapper {
     String findMockScenarioKeyById(@Param("id") Long id);
 
     /**
+     * 금융 데이터 공급자(MOCK/CODEF) 조회 (account.client.FinancialSourceResolver 전용).
+     * financial.client=hybrid 일 때 계좌 연동·동기화가 사용자별로 목서버/실 CODEF 를 고르는 근거다.
+     * findMockScenarioKeyById 와 같은 이유로 UserDto 에 넣지 않는다.
+     */
+    String findFinancialDataSourceById(@Param("id") Long id);
+
+    /**
      * 실명 갱신 (간편인증 화면). 반환값은 실제로 바뀐 행 수다 —
      * 0 이면 그 사용자가 없다는 뜻이라 서비스가 404 로 바꾼다.
      */

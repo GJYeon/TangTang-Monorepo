@@ -79,7 +79,7 @@ class AccountLinkControllerTest {
     @Test
     @DisplayName("인증 수단 목록을 ApiResponse 로 감싸 내려준다")
     void authMethods() throws Exception {
-        when(accountLinkService.authMethods()).thenReturn(AuthMethodListDto.builder()
+        when(accountLinkService.authMethods(anyLong())).thenReturn(AuthMethodListDto.builder()
                 .methods(List.of(AuthMethodDto.builder()
                         .type("SIMPLE_AUTH")
                         .providers(List.of(ProviderDto.builder().code("KAKAO").name("카카오톡").build()))
