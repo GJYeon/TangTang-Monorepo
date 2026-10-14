@@ -99,6 +99,10 @@ services:
       CODEF_API_URL: ${CODEF_API_URL}
       CODEF_CLIENT_ID: ${CODEF_CLIENT_ID}
       CODEF_CLIENT_SECRET: ${CODEF_CLIENT_SECRET}
+      # 금융 데이터 공급자 mock / codef / hybrid. 이 줄이 없으면 .env 에 적어도 컨테이너까지 오지 않는다.
+      FINANCIAL_CLIENT: ${FINANCIAL_CLIENT:-mock}
+      # 비밀번호 RSA 암호화용 CODEF 공개키. mock 이면 비어 있어도 정상 기동한다.
+      CODEF_PUBLIC_KEY: ${CODEF_PUBLIC_KEY:-}
       MOCK_API_URL: http://mock:8080
       # 이미지 저장소 전환 스위치(이슈 #162). local = 아래 uploads 볼륨 / s3 = AWS S3.
       # 이 줄이 없으면 .env 에 IMAGE_STORAGE=s3 를 적어도 컨테이너까지 전달되지 않는다.

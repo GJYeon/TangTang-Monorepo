@@ -1,5 +1,10 @@
 package com.kb.tangtang.account.client.sync;
 
+import com.kb.tangtang.account.client.CodefConnectionStore;
+import com.kb.tangtang.account.client.CodefHttpClient;
+import com.kb.tangtang.account.client.FinancialSourceResolver;
+import com.kb.tangtang.account.service.AccountNumberPolicy;
+import com.kb.tangtang.account.service.InstitutionCatalog;
 import com.kb.tangtang.user.mapper.UserMapper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,6 +14,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.Clock;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -35,6 +41,9 @@ public class FinancialSyncClientConfig {
     @Value("${mock.server.scenario-keys}")
     private String scenarioKeysRaw;
 
+    @Value("${financial.codef.base-url:https://api.codef.io}")
+    private String codefBaseUrl;
+
     @Bean
     @Qualifier("financialSyncRestTemplate")
     public RestTemplate financialSyncRestTemplate() {
@@ -44,23 +53,49 @@ public class FinancialSyncClientConfig {
         return new RestTemplate(factory);
     }
 
+    /**
+     * 목 모드는 예전 그대로 목서버 클라이언트 하나다. codef/hybrid 모드는 키 접두사로 가르는
+     * {@link RoutingFinancialSyncClient} 를 둔다 — 실 CODEF 사용자의 키는 `codef:{userId}` 다
+     * ({@link SourceAwareScenarioKeyProvider}).
+     *
+     * CODEF 쪽은 financialRestTemplate(타임아웃 없음)을 쓰는 CodefHttpClient 를 공유한다. 이 클래스의
+     * 짧은 타임아웃(목서버 기준 3·5초)을 CODEF 에 걸면 정상 스크래핑도 끊긴다 — CODEF 상품 타임아웃은 300초다.
+     */
     @Bean
     public FinancialSyncClient financialSyncClient(
-            @Qualifier("financialSyncRestTemplate") RestTemplate restTemplate) {
-        return new MockFinancialSyncClient(restTemplate, baseUrl);
+            @Qualifier("financialSyncRestTemplate") RestTemplate restTemplate,
+            FinancialSourceResolver sources,
+            CodefHttpClient codefHttpClient,
+            CodefConnectionStore codefConnections,
+            AccountNumberPolicy accountNumbers,
+            InstitutionCatalog catalog) {
+        FinancialSyncClient mock = new MockFinancialSyncClient(restTemplate, baseUrl);
+        if (sources.mode() == FinancialSourceResolver.Mode.MOCK) {
+            return mock;
+        }
+        FinancialSyncClient codef = new CodefFinancialSyncClient(
+                codefHttpClient, codefBaseUrl, codefConnections,
+                accountNumbers::mask, catalog::nameOf, Clock.systemDefaultZone());
+        return new RoutingFinancialSyncClient(mock, codef);
     }
 
     /**
      * 시연용 유저는 tbl_user.mock_scenario_key 로 시나리오를 고정할 수 있다(UserOverridingScenarioKeyProvider).
      * 그 값이 없는 더미 유저는 기존 풀-나머지 로직(PooledScenarioKeyProvider)으로 폴백한다.
+     * codef/hybrid 모드에서는 실 CODEF 사용자에게 `codef:{userId}` 키를 준다(SourceAwareScenarioKeyProvider).
      */
     @Bean
-    public ScenarioKeyProvider scenarioKeyProvider(UserMapper userMapper) {
+    public ScenarioKeyProvider scenarioKeyProvider(UserMapper userMapper, FinancialSourceResolver sources) {
         List<String> keys = Arrays.stream(scenarioKeysRaw.split(","))
                 .map(String::trim)
                 .filter(s -> !s.isEmpty())
                 .toList();
-        return new UserOverridingScenarioKeyProvider(userMapper, new PooledScenarioKeyProvider(keys));
+        ScenarioKeyProvider mockKeys =
+                new UserOverridingScenarioKeyProvider(userMapper, new PooledScenarioKeyProvider(keys));
+        if (sources.mode() == FinancialSourceResolver.Mode.MOCK) {
+            return mockKeys;
+        }
+        return new SourceAwareScenarioKeyProvider(sources, mockKeys);
     }
 
     /**

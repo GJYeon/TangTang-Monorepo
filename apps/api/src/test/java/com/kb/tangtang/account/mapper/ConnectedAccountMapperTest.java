@@ -177,7 +177,7 @@ class ConnectedAccountMapperTest {
                 .finishedAt(LocalDateTime.now().minusMinutes(5))
                 .build());
 
-        List<Long> due = connectedAccountMapper.findUserIdsDueForSync(30, 10);
+        List<Long> due = connectedAccountMapper.findUserIdsDueForSync(30, 30, "NONE", 10);
 
         /* 904 는 쿨다운 안쪽이라 빠지고, 나머지는 마지막 시도가 오래된 순이다. */
         assertEquals(List.of(user902.getId(), user903.getId(), user901.getId()),

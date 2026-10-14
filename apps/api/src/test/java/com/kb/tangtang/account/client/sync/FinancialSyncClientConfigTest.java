@@ -1,5 +1,10 @@
 package com.kb.tangtang.account.client.sync;
 
+import com.kb.tangtang.account.client.CodefConnectionStore;
+import com.kb.tangtang.account.client.CodefHttpClient;
+import com.kb.tangtang.account.client.FinancialSourceResolver;
+import com.kb.tangtang.account.service.AccountNumberPolicy;
+import com.kb.tangtang.account.service.InstitutionCatalog;
 import com.kb.tangtang.user.mapper.UserMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,6 +54,13 @@ class FinancialSyncClientConfigTest {
         // scenarioKeyProvider() 가 UserMapper 를 요구한다 — 이 테스트는 MapperScan 을 거치지 않는
         // 고립된 컨텍스트라 실제 매퍼 대신 mock 을 등록해 컨텍스트 refresh 가 깨지지 않게 한다.
         context.registerBean("userMapper", UserMapper.class, () -> mock(UserMapper.class));
+        // financialSyncClient() 가 공급자 판정·CODEF 부품을 요구한다(목 모드에서는 쓰이지 않는다).
+        context.registerBean(FinancialSourceResolver.class,
+                () -> new FinancialSourceResolver(FinancialSourceResolver.Mode.MOCK, null));
+        context.registerBean(CodefHttpClient.class, () -> mock(CodefHttpClient.class));
+        context.registerBean(CodefConnectionStore.class, () -> mock(CodefConnectionStore.class));
+        context.registerBean(AccountNumberPolicy.class, () -> new AccountNumberPolicy("test-secret"));
+        context.registerBean(InstitutionCatalog.class, InstitutionCatalog::new);
 
         PropertySourcesPlaceholderConfigurer placeholders = new PropertySourcesPlaceholderConfigurer();
         Properties props = new Properties();

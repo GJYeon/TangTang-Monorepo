@@ -139,18 +139,34 @@
       MySQL 은 ASC 정렬에서 NULL 을 맨 앞에 두므로 한 번도 시도된 적 없는 사용자가 자연히 최우선이 된다.
       thresholdMinutes 는 쿨다운 — 이보다 최근에 시도한 사용자는 아예 대상에서 뺀다.
     -->
+    <!--
+      실 CODEF 사용자는 쿨다운이 따로다(codefThresholdMinutes). CODEF 는 배치형 과다 호출 시 IP 를
+      차단한다고 경고한다 — 목서버와 같은 10분 주기로 돌리면 안 된다.
+      codefScope: NONE(목 모드) · ALL(codef 모드 — 모두 CODEF) · FLAGGED(hybrid — financial_data_source='CODEF' 만)
+      ${} 를 쓰지 않으려고 쿨다운 분기를 choose 로 고정했다(AGENTS.md MyBatis 규칙).
+    -->
     <select id="findUserIdsDueForSync" resultType="java.lang.Long">
         SELECT ca.user_id
         FROM tbl_connected_account ca
+        JOIN tbl_user u ON u.id = ca.user_id
         LEFT JOIN (
             SELECT user_id, MAX(finished_at) AS last_attempt_at
             FROM tbl_financial_sync_history
             GROUP BY user_id
         ) h ON h.user_id = ca.user_id
         WHERE ca.is_active = 1
-        GROUP BY ca.user_id, h.last_attempt_at
+        GROUP BY ca.user_id, h.last_attempt_at, u.financial_data_source
         HAVING h.last_attempt_at IS NULL
-            OR h.last_attempt_at &lt; DATE_SUB(NOW(), INTERVAL #{thresholdMinutes} MINUTE)
+            OR h.last_attempt_at &lt; DATE_SUB(NOW(), INTERVAL
+            <choose>
+                <when test="codefScope == 'ALL'">#{codefThresholdMinutes}</when>
+                <when test="codefScope == 'FLAGGED'">
+                    CASE WHEN u.financial_data_source = 'CODEF'
+                         THEN #{codefThresholdMinutes} ELSE #{thresholdMinutes} END
+                </when>
+                <otherwise>#{thresholdMinutes}</otherwise>
+            </choose>
+            MINUTE)
         ORDER BY h.last_attempt_at ASC
         LIMIT #{limit}
     </select>

@@ -322,6 +322,30 @@ class FinancialSyncServiceImplTest {
     }
 
     @Test
+    @DisplayName("실 CODEF 계좌는 전체 번호(accountNoRaw)로 해시한다 — 연동 흐름이 만든 행과 같은 키가 된다")
+    void codefBankSyncHashesRawAccountNumber() {
+        /* 실 CODEF 연동은 hash(기관, 전체번호) 로 행을 만든다. 마스킹 번호로 해시하면 같은 계좌가 두 행이 된다. */
+        String linkFlowKey = accountNumbers.hash("0004", "02004130000001");
+        when(client.getBankAccounts("1")).thenReturn(List.of(
+                BankAccountSyncDto.builder()
+                        .accountId(101L).institutionCode("0004").institutionName("KB국민은행")
+                        .accountTypeCode("DEMAND_DEPOSIT").productName("KB국민ONE통장")
+                        .accountNoMasked(accountNumbers.mask("02004130000001"))
+                        .accountNoRaw("02004130000001")
+                        .currency("KRW").balance(new BigDecimal("546000"))
+                        .build()));
+        when(connectedAccountMapper.reactivate(any())).thenReturn(1);
+        when(connectedAccountMapper.findActiveByUser(1L)).thenReturn(List.of(
+                ConnectedAccount.builder().id(55L).userId(1L).accountNoEncrypted(linkFlowKey).build()));
+
+        service.sync(1L);
+
+        verify(connectedAccountMapper).reactivate(argThat(a -> linkFlowKey.equals(a.getAccountNoEncrypted())
+                && accountNumbers.mask("02004130000001").equals(a.getAccountNoMasked())));
+        verify(connectedAccountMapper, never()).insert(any());
+    }
+
+    @Test
     @DisplayName("card_type_code 01=CARD_CREDIT, 02=CARD_CHECK 으로 분류하고, 동기화 후 연결 SQL 을 부른다")
     void classifiesCardTypesAndLinksCorrelation() {
         when(client.getCards("1")).thenReturn(List.of(

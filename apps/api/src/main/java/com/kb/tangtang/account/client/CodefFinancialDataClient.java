@@ -10,22 +10,15 @@ import com.kb.tangtang.account.domain.AuthMethod;
 import com.kb.tangtang.account.domain.AuthStatus;
 import com.kb.tangtang.common.exception.BusinessException;
 import lombok.extern.log4j.Log4j2;
-import org.springframework.http.HttpEntity;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
-import java.net.URLDecoder;
 import java.time.Instant;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -45,32 +38,42 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * ⚠ 자격증명은 이 클래스 밖으로 나가지 않는다. 로그로 찍지 않고 필드로 보관하지 않는다.
  *   비밀번호는 CodefPasswordCipher 로 RSA 암호화한 뒤에만 전송한다.
+ *
+ * 카드사(03xx)도 같은 통로로 계정을 등록한다(businessType=CD). 카드는 "계좌" 가 아니라
+ * {@link #fetchAccounts} 가 빈 목록을 주고, 보유카드·승인내역은 동기화(CodefFinancialSyncClient)가 가져온다.
  */
 @Log4j2
 public class CodefFinancialDataClient implements FinancialDataClient {
 
-    private static final String TOKEN_URL = "https://oauth.codef.io/oauth/token";
-
     /** 추가 인증이 필요하다는 CODEF 응답 코드. 이게 오면 사용자의 앱 승인을 기다린다. */
-    private static final String CONTINUE_TWO_WAY = "CF-03002";
+    private static final String CONTINUE_TWO_WAY = CodefHttpClient.CONTINUE_TWO_WAY;
 
     /** 간편인증 승인 제한 시간. 화면의 남은 시간 표시와 맞춘 값이다. */
     private static final int SIMPLE_AUTH_EXPIRES_SECONDS = 300;
 
-    private final RestTemplate restTemplate;
+    private final CodefHttpClient http;
     private final String baseUrl;
-    private final String clientId;
-    private final String clientSecret;
     private final CodefPasswordCipher passwordCipher;
+    /**
+     * 메모리 세션이 없을 때(서버 재시작 뒤 「전체 즉시 조회」) connectedId 를 찾는 곳.
+     * null 이면 세션만 본다 — 저장소 없이 만든 테스트용 인스턴스.
+     */
+    private final CodefConnectionStore connectionStore;
 
+    /** 저장소 없이 쓰는 생성자(테스트). */
     public CodefFinancialDataClient(RestTemplate restTemplate, String baseUrl,
                                     String clientId, String clientSecret,
                                     CodefPasswordCipher passwordCipher) {
-        this.restTemplate = restTemplate;
+        this(new CodefHttpClient(restTemplate, clientId, clientSecret), baseUrl, passwordCipher, null);
+    }
+
+    public CodefFinancialDataClient(CodefHttpClient http, String baseUrl,
+                                    CodefPasswordCipher passwordCipher,
+                                    CodefConnectionStore connectionStore) {
+        this.http = http;
         this.baseUrl = baseUrl;
-        this.clientId = clientId;
-        this.clientSecret = clientSecret;
         this.passwordCipher = passwordCipher;
+        this.connectionStore = connectionStore;
     }
 
     /**
@@ -130,20 +133,24 @@ public class CodefFinancialDataClient implements FinancialDataClient {
     }
 
     /**
-     * CODEF 가 개인 계좌조회를 제공하는 은행 20곳 (2026-08-05 공식 문서 `은행 - 개요` 기준).
-     *
-     * **카카오뱅크(0090)·토스뱅크(0092)는 목록에 없다.** 우리 기관 목록에는 있어서
-     * 실 CODEF 모드에서 고르면 `CF-11021` 로 반드시 실패한다 — 그래서 여기서 걸러낸다.
-     * 인터넷은행 중 제공되는 곳은 케이뱅크(0089) 하나다.
-     * 카드·증권·보험은 상품 경로가 달라 지금 구현(은행 계좌조회)으로는 다루지 못한다.
+     * 은행 20곳 + 우리 카탈로그의 카드사 6곳(CodefOrganizations 참고).
+     * 증권·보험은 상품 경로가 달라 다루지 않는다(증권은 범위 밖으로 결정, 2026-10-14).
      */
-    private static final Set<String> CODEF_BANKS = Set.of(
-            "0002", "0003", "0004", "0007", "0011", "0020", "0023", "0027", "0031", "0032",
-            "0034", "0035", "0037", "0039", "0045", "0048", "0071", "0081", "0088", "0089");
+    private static final Set<String> CODEF_ORGANIZATIONS = CodefOrganizations.supported();
 
     @Override
     public Set<String> supportedOrganizations() {
-        return CODEF_BANKS;
+        return CODEF_ORGANIZATIONS;
+    }
+
+    /**
+     * 승인된 연결의 실제 CODEF connectedId. AccountLinkService 가 이 값을 DB 에 (암호화해) 남긴다.
+     * 승인 전이거나 모르는 연결이면 비어 있다.
+     */
+    @Override
+    public Optional<String> connectedIdOf(String connectionId) {
+        Session session = connectionId == null ? null : sessions.get(connectionId);
+        return session == null ? Optional.empty() : Optional.ofNullable(session.connectedId);
     }
 
     @Override
@@ -218,9 +225,11 @@ public class CodefFinancialDataClient implements FinancialDataClient {
         for (CredentialDto credential : credentials) {
             Map<String, String> row = new LinkedHashMap<>();
             row.put("countryCode", "KR");
-            row.put("businessType", "BK");
+            /* 은행 BK · 카드 CD. 한 요청에 섞여도 CODEF 는 하나의 connectedId 아래 묶는다. */
+            row.put("businessType", CodefOrganizations.businessTypeOf(credential.getOrganization()));
             row.put("clientType", "P");
-            row.put("organization", credential.getOrganization());
+            /* 카드사는 우리 코드와 CODEF 코드가 다르다 — 나가는 순간 바꾼다(CodefOrganizations). */
+            row.put("organization", CodefOrganizations.toCodef(credential.getOrganization()));
             row.put("loginType", "1");
             row.put("id", credential.getId());
             /*
@@ -298,7 +307,7 @@ public class CodefFinancialDataClient implements FinancialDataClient {
         twoWay.put("twoWayTimestamp", info.getTwoWayTimestamp());
 
         Map<String, Object> row = new LinkedHashMap<>();
-        row.put("organization", session.organization);
+        row.put("organization", CodefOrganizations.toCodef(session.organization));
         row.put("simpleAuth", "1");
         row.put("is2Way", true);
         row.put("twoWayInfo", twoWay);
@@ -373,16 +382,20 @@ public class CodefFinancialDataClient implements FinancialDataClient {
 
     @Override
     public List<FinancialAccountDto> fetchAccounts(long userId, String connectionId, String organization) {
-        /* 실 CODEF 는 connectionId(=connectedId) 로 이미 사용자를 식별한다 — userId 는 안 쓴다. */
-        Session session = session(connectionId);
-        if (session.connectedId == null) {
-            throw new BusinessException("TOKEN_EXPIRED", "인증이 만료됐어요. 다시 연결해 주세요.");
+        String connectedId = resolveConnectedId(userId, connectionId, organization);
+
+        /*
+         * 카드사는 "계좌" 가 없다. 연결 진행 화면에서 그 기관을 성공으로 넘기기 위해 빈 목록을 준다 —
+         * 보유카드는 계좌 선택 화면의 자동 연동 미리보기와 최초 동기화가 CodefFinancialSyncClient 로 가져온다.
+         */
+        if (CodefOrganizations.isCard(organization)) {
+            return List.of();
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
         /* 바깥은 우리 식별자를 쓴다. 실제 CODEF connectedId 로 바꾸는 곳은 여기 한 곳이다. */
-        body.put("connectedId", session.connectedId);
-        body.put("organization", organization);
+        body.put("connectedId", connectedId);
+        body.put("organization", CodefOrganizations.toCodef(organization));
 
         Map<String, Object> response = post(baseUrl + "/v1/kr/bank/p/account/account-list", body);
         Map<String, Object> data = asMap(response.get("data"));
@@ -407,124 +420,33 @@ public class CodefFinancialDataClient implements FinancialDataClient {
         return accounts;
     }
 
-    /** 액세스 토큰 발급. 유효기간이 7일이라 매 호출마다 새로 받아도 부담이 없다. */
-    private String accessToken() {
-        if (clientId == null || clientId.isBlank() || clientSecret == null || clientSecret.isBlank()) {
-            throw new BusinessException("EXTERNAL_API_ERROR",
-                    "CODEF 연동 설정이 없어요. financial.codef.client-id 를 확인해 주세요.");
-        }
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-        headers.set(HttpHeaders.AUTHORIZATION, "Basic " + Base64.getEncoder()
-                .encodeToString((clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8)));
-
-        try {
-            Map<?, ?> token = restTemplate.postForObject(
-                    TOKEN_URL + "?grant_type=client_credentials&scope=read",
-                    new HttpEntity<>(headers), Map.class);
-            String value = token == null ? null : string(token.get("access_token"));
-            if (value == null) {
+    /**
+     * 우리 연결 식별자 → 실제 CODEF connectedId.
+     *
+     * 연결 직후에는 메모리 세션에 있다. 서버를 재시작했거나 세션이 만료된 뒤(「전체 즉시 조회」·재조회)에는
+     * 세션이 없으므로 **DB 에 남긴 연결(userId × 기관)** 에서 찾는다. 둘 다 없으면 재연결이 필요하다 —
+     * 호출부(AccountLinkService.syncInstitution)가 CONNECTION_NOT_FOUND 를 NEED_RECONNECT 로 바꾼다.
+     */
+    private String resolveConnectedId(long userId, String connectionId, String organization) {
+        Session session = connectionId == null ? null : sessions.get(connectionId);
+        if (session != null) {
+            if (session.connectedId == null) {
                 throw new BusinessException("TOKEN_EXPIRED", "인증이 만료됐어요. 다시 연결해 주세요.");
             }
-            return value;
-        } catch (RestClientException e) {
-            throw new BusinessException("EXTERNAL_API_UNAVAILABLE",
-                    "금융기관이 점검 중이에요. 잠시 후 다시 시도해 주세요.");
+            return session.connectedId;
         }
+        if (connectionStore != null) {
+            Optional<String> stored = connectionStore.connectedId(userId, organization);
+            if (stored.isPresent()) {
+                return stored.get();
+            }
+        }
+        return session(connectionId).connectedId;   // 없으면 CONNECTION_NOT_FOUND 를 던진다
     }
 
-    /**
-     * CODEF 는 응답 본문을 URL 인코딩해 내려준다. SDK 를 쓰지 않으므로 여기서 디코딩한다.
-     * (PLAN_목서버_구축.md Phase 2 가 착수 전 확인하라고 못박은 지점)
-     */
+    /** CODEF 호출. 토큰·URL 디코딩·결과코드 판정은 {@link CodefHttpClient} 가 한다. */
     private Map<String, Object> post(String url, Map<String, Object> body) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken());
-
-        String raw;
-        try {
-            raw = restTemplate.postForObject(url, new HttpEntity<>(body, headers), String.class);
-        } catch (RestClientException e) {
-            throw new BusinessException("EXTERNAL_API_UNAVAILABLE",
-                    "금융기관이 점검 중이에요. 잠시 후 다시 시도해 주세요.");
-        }
-        if (raw == null || raw.isBlank()) {
-            throw new BusinessException("EXTERNAL_API_ERROR", "금융기관 연동에 실패했어요.");
-        }
-        String decoded = URLDecoder.decode(raw, StandardCharsets.UTF_8);
-        return parse(decoded);
-    }
-
-    /**
-     * 응답 파싱. Jackson 을 직접 쓰지 않고 RestTemplate 의 변환기를 재사용하기 위해
-     * 디코딩한 문자열을 다시 Map 으로 읽는다.
-     */
-    private Map<String, Object> parse(String json) {
-        try {
-            com.fasterxml.jackson.databind.ObjectMapper mapper =
-                    new com.fasterxml.jackson.databind.ObjectMapper();
-            @SuppressWarnings("unchecked")
-            Map<String, Object> parsed = mapper.readValue(json, HashMap.class);
-            Map<String, Object> result = asMap(parsed.get("result"));
-            String code = string(result.get("code"));
-            /*
-             * CF-03002 는 오류가 아니라 **정상 흐름**이다 — "사용자의 앱 승인을 기다리는 중".
-             * 여기서 예외로 던지면 간편인증이 시작조차 못 한다. 호출부가 상태로 다룬다.
-             */
-            if (code != null && !"CF-00000".equals(code) && !CONTINUE_TWO_WAY.equals(code)) {
-                logFailure(code, result, parsed);
-                throw failure(result, parsed);
-            }
-            return parsed;
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new BusinessException("EXTERNAL_API_ERROR", "금융기관 응답을 읽지 못했어요.");
-        }
-    }
-
-    /** 기관이 그 로그인 방식을 지원하지 않을 때 CODEF 가 주는 코드. */
-    private static final String UNSUPPORTED_LOGIN_TYPE = "CF-11021";
-
-    /**
-     * CODEF 실패를 사용자가 **무엇을 하면 되는지 아는** 오류로 바꾼다.
-     *
-     * 최상위 메시지("사용자 계정정보 등록에 실패했습니다")는 화면에 띄워도 다음 행동이 나오지 않는다.
-     * 원인은 `errorList` 에 있고, 그중 `CF-11021`(기관과 로그인 방식 불일치)은 우리가 정확히 안내할 수 있다 —
-     * 그 기관은 간편인증을 지원하지 않으니 금융기관 로그인으로 가면 된다.
-     * 나머지는 CODEF 메시지를 그대로 전한다(지어내지 않는다).
-     */
-    static BusinessException failure(Map<String, Object> result, Map<String, Object> parsed) {
-        for (Object item : asList(asMap(parsed.get("data")).get("errorList"))) {
-            if (UNSUPPORTED_LOGIN_TYPE.equals(string(asMap(item).get("code")))) {
-                return new BusinessException("AUTH_METHOD_UNSUPPORTED",
-                        "이 금융기관은 선택한 인증 방식을 지원하지 않아요. 금융기관 로그인으로 연결해 주세요.");
-            }
-        }
-        String message = string(result.get("message"));
-        return new BusinessException("EXTERNAL_API_ERROR",
-                message == null ? "금융기관 연동에 실패했어요." : message);
-    }
-
-    /**
-     * CODEF 가 실패를 돌려줬을 때 **원인을 찾을 수 있을 만큼만** 남긴다.
-     *
-     * 최상위 `result.message` 는 "사용자 계정정보 등록에 실패했습니다" 처럼 뭉뚱그려 오고,
-     * 진짜 이유(어떤 파라미터가 틀렸는지)는 `data.errorList[].code/message` 에 기관 단위로 들어 있다.
-     * 실호출로 파라미터 이름을 확정해야 하는 간편인증에서는 이 배열이 유일한 단서다.
-     *
-     * ⚠ 응답 본문 전체를 찍지 않는다 — 이름·계좌번호 같은 개인정보가 섞여 있다.
-     *   여기서 남기는 것은 코드·메시지·기관코드뿐이다.
-     */
-    private static void logFailure(String code, Map<String, Object> result, Map<String, Object> parsed) {
-        log.warn("CODEF 응답 실패 code={} message={}", code, string(result.get("message")));
-        for (Object item : asList(asMap(parsed.get("data")).get("errorList"))) {
-            Map<String, Object> error = asMap(item);
-            log.warn("  errorList organization={} code={} message={} extra={}",
-                    string(error.get("organization")),
-                    string(error.get("code")),
-                    string(error.get("message")),
-                    string(error.get("extraMessage")));
-        }
+        return http.post(url, body);
     }
 
     private static List<String> organizations(Object listValue) {
@@ -532,19 +454,18 @@ public class CodefFinancialDataClient implements FinancialDataClient {
         for (Object item : asList(listValue)) {
             String organization = string(asMap(item).get("organization"));
             if (organization != null) {
-                result.add(organization);
+                result.add(CodefOrganizations.fromCodef(organization));
             }
         }
         return result;
     }
 
-    @SuppressWarnings("unchecked")
     private static Map<String, Object> asMap(Object value) {
-        return value instanceof Map ? (Map<String, Object>) value : Map.of();
+        return CodefHttpClient.asMap(value);
     }
 
     private static List<?> asList(Object value) {
-        return value instanceof List ? (List<?>) value : List.of();
+        return CodefHttpClient.asList(value);
     }
 
     /**
@@ -563,9 +484,9 @@ public class CodefFinancialDataClient implements FinancialDataClient {
 
         Map<String, String> row = new LinkedHashMap<>();
         row.put("countryCode", "KR");
-        row.put("businessType", "BK");
+        row.put("businessType", CodefOrganizations.businessTypeOf(organization));
         row.put("clientType", "P");
-        row.put("organization", organization);
+        row.put("organization", CodefOrganizations.toCodef(organization));
         row.put("loginType", "5");
         row.put("loginTypeLevel", loginTypeLevel);
         row.put("userName", identity.getUserName());

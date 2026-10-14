@@ -82,8 +82,12 @@ public interface ConnectedAccountMapper {
      *   "무한 연체" 상태로 매 틱 큐 맨 앞을 차지하며 다른 사용자를 굶긴다. 반면 이력은 성공(COMPLETED)이든
      *   실패(FAILED)든 매 시도마다 finished_at 이 찍히므로 실제 시도 이력을 정직하게 반영한다.
      *
-     * @param thresholdMinutes 쿨다운(분). 마지막 시도가 이보다 최근이면 대상에서 제외한다.
+     * @param thresholdMinutes      쿨다운(분). 마지막 시도가 이보다 최근이면 대상에서 제외한다.
+     * @param codefThresholdMinutes 실 CODEF 사용자의 쿨다운(분). CODEF 는 과다 호출 시 IP 를 차단한다.
+     * @param codefScope            NONE · ALL · FLAGGED — 누구를 CODEF 사용자로 볼지(XML 주석 참고)
      */
     List<Long> findUserIdsDueForSync(@Param("thresholdMinutes") int thresholdMinutes,
+                                     @Param("codefThresholdMinutes") int codefThresholdMinutes,
+                                     @Param("codefScope") String codefScope,
                                      @Param("limit") int limit);
 }

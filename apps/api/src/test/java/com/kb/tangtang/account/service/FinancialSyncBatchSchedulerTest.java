@@ -30,7 +30,7 @@ class FinancialSyncBatchSchedulerTest {
     @Test
     @DisplayName("대상 사용자 각각에 대해 sync() 를 호출한다")
     void callsSyncForEachDueUser() {
-        when(connectedAccountMapper.findUserIdsDueForSync(25, 20)).thenReturn(List.of(1L, 2L, 3L));
+        when(connectedAccountMapper.findUserIdsDueForSync(25, 25, "NONE", 20)).thenReturn(List.of(1L, 2L, 3L));
         FinancialSyncBatchScheduler scheduler = new FinancialSyncBatchScheduler(
                 connectedAccountMapper, financialSyncService, true, 20, 25);
 
@@ -44,7 +44,7 @@ class FinancialSyncBatchSchedulerTest {
     @Test
     @DisplayName("한 사용자가 실패해도 나머지 사용자는 계속 처리한다")
     void oneFailureDoesNotStopTheRest() {
-        when(connectedAccountMapper.findUserIdsDueForSync(25, 20)).thenReturn(List.of(1L, 2L, 3L));
+        when(connectedAccountMapper.findUserIdsDueForSync(25, 25, "NONE", 20)).thenReturn(List.of(1L, 2L, 3L));
         when(financialSyncService.sync(2L)).thenThrow(new RuntimeException("동기화 실패"));
         FinancialSyncBatchScheduler scheduler = new FinancialSyncBatchScheduler(
                 connectedAccountMapper, financialSyncService, true, 20, 25);
@@ -70,24 +70,24 @@ class FinancialSyncBatchSchedulerTest {
     @Test
     @DisplayName("minIntervalMinutes·maxUsersPerTick 를 findUserIdsDueForSync 에 그대로 전달한다")
     void passesThresholdAndMaxUsersPerTickToMapper() {
-        when(connectedAccountMapper.findUserIdsDueForSync(25, 5)).thenReturn(List.of());
+        when(connectedAccountMapper.findUserIdsDueForSync(25, 25, "NONE", 5)).thenReturn(List.of());
         FinancialSyncBatchScheduler scheduler = new FinancialSyncBatchScheduler(
                 connectedAccountMapper, financialSyncService, true, 5, 25);
 
         scheduler.runBatch();
 
-        verify(connectedAccountMapper).findUserIdsDueForSync(25, 5);
+        verify(connectedAccountMapper).findUserIdsDueForSync(25, 25, "NONE", 5);
     }
 
     @Test
     @DisplayName("설정된 쿨다운(minIntervalMinutes)을 그대로 넘긴다 — 하드코딩된 값이 아니다")
     void passesConfiguredCooldownToMapper() {
-        when(connectedAccountMapper.findUserIdsDueForSync(90, 20)).thenReturn(List.of());
+        when(connectedAccountMapper.findUserIdsDueForSync(90, 90, "NONE", 20)).thenReturn(List.of());
         FinancialSyncBatchScheduler scheduler = new FinancialSyncBatchScheduler(
                 connectedAccountMapper, financialSyncService, true, 20, 90);
 
         scheduler.runBatch();
 
-        verify(connectedAccountMapper).findUserIdsDueForSync(90, 20);
+        verify(connectedAccountMapper).findUserIdsDueForSync(90, 90, "NONE", 20);
     }
 }
